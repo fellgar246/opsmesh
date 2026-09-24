@@ -60,9 +60,7 @@ def test_seed_reads_match_the_reference_sku(client: TestClient) -> None:
     assert body["available_units"] == body["on_hand_units"] - body["reserved_units"]
     assert body["reorder_point_units"] == 180
     _utc(body["observed_at"])
-    ForecastRead.model_validate(
-        client.get(f"/tenants/{NORTHWIND}/forecasts/{SKU}/{REGION}").json()
-    )
+    ForecastRead.model_validate(client.get(f"/tenants/{NORTHWIND}/forecasts/{SKU}/{REGION}").json())
 
     forecast = client.get(f"/tenants/{NORTHWIND}/forecasts/{SKU}/{REGION}")
     assert forecast.status_code == 200
@@ -327,9 +325,7 @@ def test_forecast_quality_bounds() -> None:
         )
 
 
-def test_reload_is_idempotent(
-    client: TestClient, session_factory: sessionmaker[Session]
-) -> None:
+def test_reload_is_idempotent(client: TestClient, session_factory: sessionmaker[Session]) -> None:
     first = client.get(f"/tenants/{NORTHWIND}/inventory/skus/{SKU}/regions/{REGION}").json()
     with session_factory() as db:
         stock = db.get(SkuStock, (NORTHWIND, SKU, REGION))

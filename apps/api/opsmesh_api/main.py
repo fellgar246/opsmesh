@@ -9,6 +9,7 @@ from opsmesh_api.routes.health import router as health_router
 from opsmesh_api.routes.inventory import router as inventory_router
 from opsmesh_api.routes.procurement import router as procurement_router
 from opsmesh_api.routes.supplier import router as supplier_router
+from opsmesh_api.routes.workflows import router as workflow_router
 
 
 def create_app() -> FastAPI:
@@ -20,6 +21,7 @@ def create_app() -> FastAPI:
     app.include_router(supplier_router)
     app.include_router(finance_router)
     app.include_router(procurement_router)
+    app.include_router(workflow_router)
     return app
 
 

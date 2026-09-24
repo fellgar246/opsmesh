@@ -24,6 +24,15 @@ from opsmesh_api.services.models import (
     Tenant,
 )
 from opsmesh_api.services.schemas import FixtureDocument
+from opsmesh_api.workflows.models import (
+    AgentResult,
+    AgentTask,
+    Approval,
+    Evidence,
+    OperationalProposal,
+    ToolExecution,
+    WorkflowRun,
+)
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "enterprise.json"
 
@@ -31,6 +40,13 @@ _MONEY_KEYS = frozenset({"available_cents", "committed_cents", "unit_cost_cents"
 _SCORE_KEYS = frozenset({"quality", "reliability_score"})
 
 _CLEAR_ORDER = (
+    ToolExecution,
+    AgentResult,
+    Approval,
+    OperationalProposal,
+    Evidence,
+    AgentTask,
+    WorkflowRun,
     PurchaseOrder,
     SupplierDelay,
     SupplierTerms,

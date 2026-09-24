@@ -3,6 +3,7 @@
 from logging.config import fileConfig
 
 import opsmesh_api.services.models  # noqa: F401
+import opsmesh_api.workflows.models  # noqa: F401
 from alembic import context
 from opsmesh_api.db import Base
 from opsmesh_api.settings import get_settings
