@@ -1,0 +1,238 @@
+{
+  "observed_at": "2026-09-01T00:00:00Z",
+  "tenants": [
+    {
+      "tenant_id": "northwind",
+      "name": "Northwind",
+      "budget": {
+        "available_cents": 4200000,
+        "committed_cents": 180000
+      },
+      "suppliers": [
+        {
+          "supplier_id": "andina-supply",
+          "name": "Andina Supply",
+          "status": "approved",
+          "reliability_score": 0.875,
+          "delay": null,
+          "terms": [
+            {
+              "sku": "ABC-42",
+              "lead_time_days": 12,
+              "minimum_order_quantity": 100,
+              "case_pack": 50,
+              "unit_cost_cents": 3700,
+              "preferred": true
+            }
+          ]
+        },
+        {
+          "supplier_id": "unapproved-mills",
+          "name": "Unapproved Mills",
+          "status": "unapproved",
+          "reliability_score": 0.25,
+          "delay": null,
+          "terms": [
+            {
+              "sku": "XYZ-9",
+              "lead_time_days": 18,
+              "minimum_order_quantity": 24,
+              "case_pack": 12,
+              "unit_cost_cents": 2200,
+              "preferred": true
+            }
+          ]
+        },
+        {
+          "supplier_id": "pacific-freight",
+          "name": "Pacific Freight",
+          "status": "approved",
+          "reliability_score": 0.5,
+          "delay": {
+            "delay_id": "delay-pacific-1",
+            "delay_days": 6,
+            "reason": "port congestion",
+            "started_at": "2026-09-10T00:00:00Z",
+            "active": true
+          },
+          "terms": [
+            {
+              "sku": "DEF-7",
+              "lead_time_days": 9,
+              "minimum_order_quantity": 30,
+              "case_pack": 10,
+              "unit_cost_cents": 1800,
+              "preferred": true
+            }
+          ]
+        }
+      ],
+      "stocks": [
+        {
+          "sku": "ABC-42",
+          "region": "mx-central",
+          "on_hand": 140,
+          "reserved": 12,
+          "available": 128,
+          "reorder_point": 180,
+          "safety_stock": 40
+        },
+        {
+          "sku": "XYZ-9",
+          "region": "mx-central",
+          "on_hand": 8,
+          "reserved": 0,
+          "available": 8,
+          "reorder_point": 16,
+          "safety_stock": 4
+        },
+        {
+          "sku": "DEF-7",
+          "region": "mx-central",
+          "on_hand": 50,
+          "reserved": 5,
+          "available": 45,
+          "reorder_point": 60,
+          "safety_stock": 12
+        }
+      ],
+      "stockouts": [
+        {
+          "stockout_id": "northwind-abc42-2026-06",
+          "sku": "ABC-42",
+          "region": "mx-central",
+          "started_at": "2026-06-12T00:00:00Z",
+          "ended_at": "2026-06-13T18:00:00Z",
+          "units_short": 22
+        }
+      ],
+      "forecasts": [
+        {
+          "sku": "ABC-42",
+          "region": "mx-central",
+          "horizon_days": 30,
+          "p10": 275,
+          "p50": 310,
+          "p90": 345,
+          "trend": "rising",
+          "quality": 0.75,
+          "seasonality": {"label": "in-season", "index": 1.25},
+          "promotion": {"active": false, "name": null}
+        },
+        {
+          "sku": "XYZ-9",
+          "region": "mx-central",
+          "horizon_days": 30,
+          "p10": 8,
+          "p50": 14,
+          "p90": 21,
+          "trend": "falling",
+          "quality": 0.5,
+          "seasonality": {"label": "none", "index": 1.0},
+          "promotion": {"active": false, "name": null}
+        },
+        {
+          "sku": "DEF-7",
+          "region": "mx-central",
+          "horizon_days": 30,
+          "p10": 20,
+          "p50": 40,
+          "p90": 55,
+          "trend": "stable",
+          "quality": 0.5,
+          "seasonality": {"label": "none", "index": 1.0},
+          "promotion": {"active": false, "name": null}
+        }
+      ],
+      "purchase_orders": [
+        {
+          "purchase_order_id": "po-northwind-0901",
+          "supplier_id": "andina-supply",
+          "sku": "ABC-42",
+          "quantity": 100,
+          "status": "received",
+          "expected_receipt_on": "2026-08-15"
+        },
+        {
+          "purchase_order_id": "po-northwind-1001",
+          "supplier_id": "andina-supply",
+          "sku": "ABC-42",
+          "quantity": 200,
+          "status": "open",
+          "expected_receipt_on": "2026-09-28"
+        },
+        {
+          "purchase_order_id": "po-northwind-2002",
+          "supplier_id": "pacific-freight",
+          "sku": "DEF-7",
+          "quantity": 30,
+          "status": "open",
+          "expected_receipt_on": "2026-10-05"
+        }
+      ]
+    },
+    {
+      "tenant_id": "contoso",
+      "name": "Contoso",
+      "budget": {
+        "available_cents": 80000,
+        "committed_cents": 5000
+      },
+      "suppliers": [
+        {
+          "supplier_id": "contoso-parts",
+          "name": "Contoso Parts",
+          "status": "approved",
+          "reliability_score": 0.75,
+          "delay": null,
+          "terms": [
+            {
+              "sku": "LMN-3",
+              "lead_time_days": 7,
+              "minimum_order_quantity": 10,
+              "case_pack": 5,
+              "unit_cost_cents": 999,
+              "preferred": true
+            }
+          ]
+        }
+      ],
+      "stocks": [
+        {
+          "sku": "LMN-3",
+          "region": "us-east",
+          "on_hand": 40,
+          "reserved": 5,
+          "available": 35,
+          "reorder_point": 25,
+          "safety_stock": 5
+        }
+      ],
+      "stockouts": [],
+      "forecasts": [
+        {
+          "sku": "LMN-3",
+          "region": "us-east",
+          "horizon_days": 30,
+          "p10": 10,
+          "p50": 20,
+          "p90": 30,
+          "trend": "stable",
+          "quality": 0.5,
+          "seasonality": {"label": "none", "index": 1.0},
+          "promotion": {"active": false, "name": null}
+        }
+      ],
+      "purchase_orders": [
+        {
+          "purchase_order_id": "po-contoso-1",
+          "supplier_id": "contoso-parts",
+          "sku": "LMN-3",
+          "quantity": 10,
+          "status": "open",
+          "expected_receipt_on": "2026-09-18"
+        }
+      ]
+    }
+  ]
+}

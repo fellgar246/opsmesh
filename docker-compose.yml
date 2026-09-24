@@ -1,0 +1,14 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: opsmesh
+      POSTGRES_PASSWORD: opsmesh
+      POSTGRES_DB: opsmesh
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U opsmesh -d opsmesh"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
