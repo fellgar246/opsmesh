@@ -277,6 +277,15 @@ class FixtureTenant(APIModel):
     purchase_orders: list[FixturePurchaseOrder]
 
 
+class TenantRead(APIModel):
+    tenant_id: str
+    name: str
+
+
+class TenantList(APIModel):
+    tenants: list[TenantRead]
+
+
 class FixtureDocument(APIModel):
     observed_at: datetime
     tenants: list[FixtureTenant] = Field(min_length=2)

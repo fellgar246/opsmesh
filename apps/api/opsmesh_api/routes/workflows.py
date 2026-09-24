@@ -22,6 +22,7 @@ from opsmesh_api.workflows.schemas import (
     ToolExecutionCreate,
     ToolExecutionRead,
     WorkflowRunCreate,
+    WorkflowRunList,
     WorkflowRunRead,
 )
 from opsmesh_api.workflows.store import WorkflowStore
@@ -31,6 +32,14 @@ router = APIRouter(prefix="/tenants/{tenant_id}/workflow-runs", tags=["workflows
 
 def _store(db: Annotated[Session, Depends(get_db)]) -> WorkflowStore:
     return WorkflowStore(db)
+
+
+@router.get("", response_model=WorkflowRunList)
+def list_runs(
+    tenant_id: str,
+    store: Annotated[WorkflowStore, Depends(_store)],
+) -> WorkflowRunList:
+    return call(lambda: WorkflowRunList(workflow_runs=store.list_runs(tenant_id)))
 
 
 @router.post("", response_model=WorkflowRunRead)

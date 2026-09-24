@@ -33,6 +33,14 @@ The API health check expects `DATABASE_URL` from `.env.example`. Compose publish
 cd apps/api && uv run uvicorn opsmesh_api.main:app --reload
 ```
 
+The operations console runs separately and calls that API:
+
+```bash
+cd apps/web && npm run dev
+```
+
+Open `http://localhost:3000`. The local session uses tenant `northwind` and the operations analyst identity.
+
 `GET /health` returns success after it can run a query on local PostgreSQL.
 
 Load the enterprise fixtures after the schema is current. Running the loader again replaces simulator rows with the same fixtures.

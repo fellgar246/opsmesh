@@ -222,6 +222,17 @@ class WorkflowStore:
         self._insert(row)
         return self._tool_read(row)
 
+    def list_runs(self, tenant_id: str) -> list[WorkflowRunRead]:
+        """Return persisted runs for one tenant, newest start time first."""
+
+        self._require_tenant(tenant_id)
+        runs = self._db.scalars(
+            select(WorkflowRun)
+            .where(WorkflowRun.tenant_id == tenant_id)
+            .order_by(WorkflowRun.started_at.desc(), WorkflowRun.id.desc())
+        ).all()
+        return [self.get_run(tenant_id, run.id) for run in runs]
+
     def get_run(self, tenant_id: str, run_id: UUID) -> WorkflowRunRead:
         run = self._db.scalar(
             select(WorkflowRun).where(

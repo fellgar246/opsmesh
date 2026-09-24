@@ -284,3 +284,7 @@ class WorkflowRunRead(APIModel):
     tasks: list[AgentTaskRead]
     evidence: list[EvidenceRead]
     proposals: list[ProposalRead]
+
+
+class WorkflowRunList(APIModel):
+    workflow_runs: list[WorkflowRunRead]

@@ -1,0 +1,127 @@
+@import "tailwindcss";
+
+:root {
+  --bg-canvas: #f7f8fa;
+  --bg-surface: #ffffff;
+  --bg-surface-raised: #ffffff;
+  --bg-surface-sunken: #f1f3f6;
+  --bg-selected: #eef2ff;
+  --border-default: #e3e6eb;
+  --border-strong: #c9ced6;
+  --fg-default: #111827;
+  --fg-muted: #4b5563;
+  --fg-subtle: #6b7280;
+  --accent: #3b5bdb;
+  --accent-fg: #ffffff;
+  --focus-ring: #3b5bdb;
+  --neutral-fg: #4b5563;
+  --neutral-bg: #f1f3f6;
+  --info-fg: #1d4ed8;
+  --info-bg: #eff6ff;
+  --success-fg: #15803d;
+  --success-bg: #f0fdf4;
+  --warning-fg: #b45309;
+  --warning-bg: #fffbeb;
+  --danger-fg: #b91c1c;
+  --danger-bg: #fef2f2;
+  --expired-fg: #6b21a8;
+  --expired-bg: #faf5ff;
+  --agent-supervisor: #475569;
+  --agent-inventory: #0891b2;
+  --agent-demand: #7c3aed;
+  --agent-supplier: #db2777;
+  --agent-finance: #4f46e5;
+  --agent-policy: #a16207;
+  --agent-rules: #111827;
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg-canvas: #0b0d12;
+    --bg-surface: #12151c;
+    --bg-surface-raised: #181c25;
+    --bg-surface-sunken: #0f1218;
+    --bg-selected: #1c2340;
+    --border-default: #262b36;
+    --border-strong: #3a4150;
+    --fg-default: #e6e8ec;
+    --fg-muted: #a3aab8;
+    --fg-subtle: #7c8595;
+    --accent: #7c94f5;
+    --accent-fg: #0b0d12;
+    --focus-ring: #7c94f5;
+    --neutral-fg: #a3aab8;
+    --neutral-bg: #1e232d;
+    --info-fg: #8ab4ff;
+    --info-bg: #14223f;
+    --success-fg: #6bd68e;
+    --success-bg: #0f2a1a;
+    --warning-fg: #f5b454;
+    --warning-bg: #2e2210;
+    --danger-fg: #ff8a8a;
+    --danger-bg: #331414;
+    --expired-fg: #c9a2f5;
+    --expired-bg: #24163a;
+    --agent-rules: #e6e8ec;
+    color-scheme: dark;
+  }
+}
+
+@theme inline {
+  --color-canvas: var(--bg-canvas);
+  --color-surface: var(--bg-surface);
+  --color-raised: var(--bg-surface-raised);
+  --color-sunken: var(--bg-surface-sunken);
+  --color-selected: var(--bg-selected);
+  --color-line: var(--border-default);
+  --color-line-strong: var(--border-strong);
+  --color-ink: var(--fg-default);
+  --color-muted: var(--fg-muted);
+  --color-subtle: var(--fg-subtle);
+  --color-accent: var(--accent);
+  --color-accent-fg: var(--accent-fg);
+  --font-sans: var(--font-inter), system-ui, sans-serif;
+  --font-mono: var(--font-mono), ui-monospace, monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+  background: var(--bg-canvas);
+  color: var(--fg-default);
+  font-family: var(--font-inter), system-ui, sans-serif;
+  font-size: 14px;
+  line-height: 20px;
+}
+
+button,
+a,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+}

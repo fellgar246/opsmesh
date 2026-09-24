@@ -1,6 +1,6 @@
 """Workflow records survive a new session and stay inside the tenant."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 import pytest
@@ -351,6 +351,41 @@ def test_http_read_after_write_uses_a_new_session(
     hidden = client.get(f"/tenants/{CONTOSO}/workflow-runs/{run.id}")
     assert hidden.status_code == 404
     assert "ABC-42" not in hidden.text
+
+
+def test_http_lists_runs_newest_first_for_the_selected_tenant(
+    session_factory: sessionmaker[Session],
+    client: TestClient,
+) -> None:
+    older = _run()
+    newer = _run()
+    newer = newer.model_copy(update={"started_at": STARTED + timedelta(minutes=5)})
+    with session_factory() as session:
+        store = WorkflowStore(session)
+        store.create_run(NORTHWIND, older)
+        store.create_run(NORTHWIND, newer)
+        store.create_run(CONTOSO, _run())
+
+    response = client.get(f"/tenants/{NORTHWIND}/workflow-runs")
+    assert response.status_code == 200
+    ids = [item["id"] for item in response.json()["workflow_runs"]]
+    assert ids[0] == str(newer.id)
+    assert str(older.id) in ids
+    assert ids.index(str(newer.id)) < ids.index(str(older.id))
+    assert all(item["tenant_id"] == NORTHWIND for item in response.json()["workflow_runs"])
+
+    other = client.get(f"/tenants/{CONTOSO}/workflow-runs")
+    other_ids = [item["id"] for item in other.json()["workflow_runs"]]
+    assert str(newer.id) not in other_ids
+    assert str(older.id) not in other_ids
+
+
+def test_http_lists_tenants(client: TestClient) -> None:
+    response = client.get("/tenants")
+    assert response.status_code == 200
+    names = {item["tenant_id"]: item["name"] for item in response.json()["tenants"]}
+    assert names["northwind"] == "Northwind"
+    assert names["contoso"] == "Contoso"
 
 
 def test_http_rejects_self_dependent_task(

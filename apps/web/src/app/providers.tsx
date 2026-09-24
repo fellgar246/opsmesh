@@ -1,9 +1,24 @@
 "use client";
 
+"use client";
+
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useState, type ReactNode } from "react";
 
+import { SessionProvider } from "@/lib/session";
+
 export function Providers({ children }: { children: ReactNode }) {
-  const [client] = useState(() => new QueryClient());
-  return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
+  const [client] = useState(
+    () =>
+      new QueryClient({
+        defaultOptions: {
+          queries: { staleTime: 0, refetchOnWindowFocus: true, retry: 1 },
+        },
+      }),
+  );
+  return (
+    <QueryClientProvider client={client}>
+      <SessionProvider>{children}</SessionProvider>
+    </QueryClientProvider>
+  );
 }

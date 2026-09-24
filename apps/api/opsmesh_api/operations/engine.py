@@ -7,11 +7,10 @@ from uuid import UUID, uuid4
 
 from sqlalchemy.orm import Session
 
-from opsmesh_api.operations.policy import (
-    REASON_ADEQUATE_STOCK,
-    REASON_MISSING_EVIDENCE,
-    approval_for_total,
-)
+from opsmesh_api.agents.contracts import AgentClient
+from opsmesh_api.agents.coordinator import ReorderCoordination, ReorderCoordinator
+from opsmesh_api.agents.stubs import StubAgentClient
+from opsmesh_api.operations.policy import REASON_MISSING_EVIDENCE, approval_for_total
 from opsmesh_api.operations.quantity import select_demand, solve_reorder
 from opsmesh_api.operations.risk import classify_stockout_risk, stockout_risk_score
 from opsmesh_api.operations.schemas import (
@@ -60,163 +59,201 @@ _APPROVAL_TTL = timedelta(days=7)
 class OperationalEngine:
     """Gather simulator facts, apply policy, and persist one workflow run."""
 
-    def __init__(self, db: Session) -> None:
+    def __init__(self, db: Session, agent_client: AgentClient | None = None) -> None:
         self._db = db
         self._inventory = InventoryService(db)
         self._forecast = ForecastService(db)
         self._supplier = SupplierService(db)
         self._finance = FinanceService(db)
         self._store = WorkflowStore(db)
+        self._agent_client = agent_client
 
     def reorder(self, tenant_id: str, body: ReorderRequest) -> ReorderRead:
         self._require_tenant(tenant_id)
         started = datetime.now(UTC)
         timer = perf_counter()
-        calls = 0
-        facts: list[_Fact] = []
-        try:
-            calls += 1
-            snapshot = self._inventory.get_snapshot(tenant_id, body.sku, body.region)
-            facts.append(
-                _from_model(
-                    "inventory",
-                    "inventory_snapshot",
-                    f"{body.sku}:{body.region}",
-                    snapshot,
-                )
-            )
-            calls += 1
-            forecast = self._forecast.get_forecast(
-                tenant_id, body.sku, body.region, FORECAST_HORIZON_DAYS
-            )
-            facts.append(
-                _from_model(
-                    "demand",
-                    "forecast",
-                    f"{body.sku}:{body.region}:{FORECAST_HORIZON_DAYS}",
-                    forecast,
-                )
-            )
-            calls += 1
-            preferred = self._supplier.get_preferred(tenant_id, body.sku)
-            calls += 1
-            terms = self._supplier.get_terms(tenant_id, preferred.supplier_id, body.sku)
-            facts.append(
-                _from_model(
-                    "supplier",
-                    "supplier_terms",
-                    f"{terms.supplier_id}:{body.sku}",
-                    terms,
-                )
-            )
-            calls += 1
-            budget = self._finance.get_budget(tenant_id)
-            facts.append(_from_model("finance", "budget", tenant_id, budget))
-        except NotFoundError:
-            return self._failed_reorder(
-                tenant_id,
-                body,
-                started,
-                timer,
-                calls,
-                facts,
-            )
-
-        math = solve_reorder(
-            service_level=body.service_level,
-            p50=forecast.p50,
-            p90=forecast.p90,
-            available_units=snapshot.available_units,
-            case_pack=terms.case_pack,
-            minimum_order_quantity=terms.minimum_order_quantity,
-            unit_cost_cents=terms.unit_cost_cents,
-            supplier_status=terms.status.value,
-            available_cents=budget.available_cents,
-        )
-        calls += 1
-        if math.quantity > 0:
-            self._finance.estimate(tenant_id, math.quantity, math.unit_cost_cents)
-        manager, finance = (False, False)
-        if math.reason is None and math.quantity > 0:
-            manager, finance = approval_for_total(math.extended_cost_cents)
-        score = stockout_risk_score(
-            snapshot.available_units,
-            terms.lead_time_days,
-            math.selected_demand,
-            forecast.horizon_days,
-        )
-        arguments: dict[str, Any] | None = None
-        if math.reason is None or math.reason == REASON_ADEQUATE_STOCK:
-            arguments = {
-                "sku": body.sku,
-                "region": body.region,
-                "supplier_id": terms.supplier_id,
-                "service_level": body.service_level,
-                "selected_quantile": math.selected_quantile,
-                "selected_demand": math.selected_demand,
-                "gross_need": math.gross_need,
-                "quantity": math.quantity,
-                "case_pack": terms.case_pack,
-                "minimum_order_quantity": terms.minimum_order_quantity,
-                "unit_cost_cents": math.unit_cost_cents,
-                "extended_cost_cents": math.extended_cost_cents,
-                "requires_manager_approval": manager,
-                "requires_finance_approval": finance,
-                "reason": math.reason,
-            }
-        policy = {
-            "reason": math.reason,
-            "blocked": math.blocked,
-            "selected_quantile": math.selected_quantile,
-            "selected_demand": math.selected_demand,
-            "gross_need": math.gross_need,
-            "quantity": math.quantity,
-            "extended_cost_cents": math.extended_cost_cents,
-            "requires_manager_approval": manager,
-            "requires_finance_approval": finance,
-        }
-        facts.append(_computed("policy", "policy_decision", body.sku, policy, started))
-        status = WorkflowStatus.COMPLETED
-        if manager or finance:
-            status = WorkflowStatus.WAITING_APPROVAL
-        risk = classify_stockout_risk(score)
-        latency_ms = _latency(timer)
-        run_id = self._persist(
+        run_id = uuid4()
+        client = self._agent_client or StubAgentClient(self._db)
+        outcome = ReorderCoordinator(client).run(
+            workflow_id=run_id,
             tenant_id=tenant_id,
-            workflow_type="reorder",
-            requested_by=body.requested_by,
-            status=status,
-            workflow_input={
-                "sku": body.sku,
-                "region": body.region,
-                "service_level": body.service_level,
-            },
+            request=body,
+        )
+        latency_ms = _latency(timer)
+        risk = RiskLevel.HIGH
+        if outcome.math is not None and outcome.context is not None:
+            inventory = outcome.context.facts["inventory"]
+            supplier = outcome.context.facts["supplier"]
+            score = stockout_risk_score(
+                inventory["available_units"],
+                supplier["lead_time_days"],
+                outcome.math.selected_demand,
+                FORECAST_HORIZON_DAYS,
+            )
+            risk = classify_stockout_risk(score) if outcome.math.quantity > 0 else RiskLevel.LOW
+        arguments = None
+        if outcome.context is not None and outcome.context.proposals:
+            arguments = outcome.context.proposals[0]
+        self._persist_reorder(
+            tenant_id=tenant_id,
+            run_id=run_id,
+            body=body,
+            outcome=outcome,
             started=started,
             latency_ms=latency_ms,
-            tool_calls=calls,
-            facts=facts,
             proposal_arguments=arguments,
-            proposal_type="reorder",
-            risk_level=risk if math.quantity > 0 else RiskLevel.LOW,
-            requires_manager=manager,
-            requires_finance=finance,
+            risk_level=risk,
         )
+        math = outcome.math
         return ReorderRead(
             run_id=run_id,
             workflow_type="reorder",
-            status=status,
-            reason=math.reason,
-            selected_quantile=math.selected_quantile,
-            selected_demand=math.selected_demand,
-            gross_need=math.gross_need,
-            quantity=math.quantity,
-            unit_cost_cents=math.unit_cost_cents,
-            extended_cost_cents=math.extended_cost_cents,
-            requires_manager_approval=manager,
-            requires_finance_approval=finance,
+            status=outcome.workflow_status,
+            reason=outcome.reason,
+            selected_quantile=None if math is None else math.selected_quantile,
+            selected_demand=None if math is None else math.selected_demand,
+            gross_need=None if math is None else math.gross_need,
+            quantity=None if math is None else math.quantity,
+            unit_cost_cents=None if math is None else math.unit_cost_cents,
+            extended_cost_cents=None if math is None else math.extended_cost_cents,
+            requires_manager_approval=outcome.manager,
+            requires_finance_approval=outcome.finance,
             proposal_arguments=arguments,
-            cost_summary=_cost(calls, latency_ms),
+            cost_summary=_cost(outcome.tool_calls, latency_ms),
         )
+
+    def _persist_reorder(
+        self,
+        *,
+        tenant_id: str,
+        run_id: UUID,
+        body: ReorderRequest,
+        outcome: ReorderCoordination,
+        started: datetime,
+        latency_ms: int,
+        proposal_arguments: dict[str, Any] | None,
+        risk_level: RiskLevel,
+    ) -> None:
+        from opsmesh_api.workflows.hashing import canonical_json_hash
+        from opsmesh_api.workflows.schemas import WorkflowRunCreate
+
+        finished = datetime.now(UTC)
+        self._store.create_run(
+            tenant_id,
+            WorkflowRunCreate(
+                id=run_id,
+                workflow_type="reorder",
+                requested_by=body.requested_by,
+                status=outcome.workflow_status,
+                input={
+                    "sku": body.sku,
+                    "region": body.region,
+                    "service_level": body.service_level,
+                },
+                started_at=started,
+                finished_at=finished,
+                cost_summary=_cost(outcome.tool_calls, latency_ms),
+            ),
+        )
+        for recorded in outcome.runs:
+            task_input = {
+                "agent": recorded.task.agent.value,
+                "tenant_id": recorded.task.tenant_id,
+                "parameters": recorded.task.parameters,
+                "evidence_refs": [
+                    item.model_dump(mode="json") for item in recorded.task.evidence_refs
+                ],
+            }
+            self._store.add_task(
+                tenant_id,
+                run_id,
+                AgentTaskCreate(
+                    id=recorded.task.task_id,
+                    agent_type=recorded.task.agent.value,
+                    status=recorded.status,
+                    input=task_input,
+                    started_at=started,
+                    finished_at=finished,
+                ),
+            )
+            self._store.add_result(
+                tenant_id,
+                run_id,
+                recorded.task.task_id,
+                AgentResultCreate(
+                    id=uuid4(),
+                    schema_version=recorded.envelope.schema_version,
+                    facts=recorded.decision_facts or {},
+                    evidence=recorded.envelope.evidence,
+                    warnings=recorded.envelope.warnings,
+                    confidence=recorded.envelope.confidence,
+                    model_id=None,
+                    prompt_version=None,
+                ),
+            )
+            if recorded.decision_facts is None or recorded.task.agent.value == "policy":
+                continue
+            for item in recorded.envelope.evidence:
+                self._store.add_evidence(
+                    tenant_id,
+                    run_id,
+                    EvidenceCreate(
+                        id=uuid4(),
+                        type=item.type,
+                        source=item.source,
+                        source_record_id=item.source_record_id,
+                        observed_at=item.observed_at,
+                        checksum=canonical_json_hash(recorded.decision_facts),
+                    ),
+                )
+        if proposal_arguments is None:
+            return
+        proposal_id = uuid4()
+        proposal_status = (
+            ProposalStatus.PENDING_APPROVAL
+            if outcome.manager or outcome.finance
+            else ProposalStatus.DRAFT
+        )
+        self._store.add_proposal(
+            tenant_id,
+            run_id,
+            ProposalCreate(
+                id=proposal_id,
+                proposal_type="reorder",
+                arguments=proposal_arguments,
+                estimated_impact={"extended_cost_cents": _impact_cents(proposal_arguments)},
+                risk_level=risk_level,
+                status=proposal_status,
+                created_at=finished,
+            ),
+        )
+        expires = finished + _APPROVAL_TTL
+        if outcome.manager:
+            self._store.add_approval(
+                tenant_id,
+                run_id,
+                proposal_id,
+                ApprovalCreate(
+                    id=uuid4(),
+                    arguments=proposal_arguments,
+                    required_role=ApprovalRole.PROCUREMENT_MANAGER,
+                    status=ApprovalStatus.PENDING,
+                    expires_at=expires,
+                ),
+            )
+        if outcome.finance:
+            self._store.add_approval(
+                tenant_id,
+                run_id,
+                proposal_id,
+                ApprovalCreate(
+                    id=uuid4(),
+                    arguments=proposal_arguments,
+                    required_role=ApprovalRole.FINANCE_APPROVER,
+                    status=ApprovalStatus.PENDING,
+                    expires_at=expires,
+                ),
+            )
 
     def supplier_delay(self, tenant_id: str, body: SupplierDelayRequest) -> SupplierDelayRead:
         self._require_tenant(tenant_id)
@@ -485,52 +522,6 @@ class OperationalEngine:
             status=status,
             lines=lines,
             proposal_arguments=arguments,
-            cost_summary=_cost(calls, _latency(timer)),
-        )
-
-    def _failed_reorder(
-        self,
-        tenant_id: str,
-        body: ReorderRequest,
-        started: datetime,
-        timer: float,
-        calls: int,
-        facts: list["_Fact"],
-    ) -> ReorderRead:
-        facts.append(
-            _computed(
-                "policy",
-                "policy_decision",
-                body.sku,
-                {"reason": REASON_MISSING_EVIDENCE},
-                started,
-            )
-        )
-        run_id = self._persist(
-            tenant_id=tenant_id,
-            workflow_type="reorder",
-            requested_by=body.requested_by,
-            status=WorkflowStatus.FAILED,
-            workflow_input={
-                "sku": body.sku,
-                "region": body.region,
-                "service_level": body.service_level,
-            },
-            started=started,
-            latency_ms=_latency(timer),
-            tool_calls=calls,
-            facts=facts,
-            proposal_arguments=None,
-            proposal_type="reorder",
-            risk_level=RiskLevel.HIGH,
-            requires_manager=False,
-            requires_finance=False,
-        )
-        return ReorderRead(
-            run_id=run_id,
-            workflow_type="reorder",
-            status=WorkflowStatus.FAILED,
-            reason=REASON_MISSING_EVIDENCE,
             cost_summary=_cost(calls, _latency(timer)),
         )
 
