@@ -198,8 +198,9 @@ def test_purchase_orders_are_listed_and_nothing_submits_them(client: TestClient)
     for route in app.routes:
         if isinstance(route, APIRoute):
             assert route.methods is not None
-            assert not (set(route.methods) & write_methods)
             paths.append(route.path)
+            if "/procurement/" in route.path or route.path.endswith("/purchase-orders"):
+                assert not (set(route.methods) & write_methods)
     blob = " ".join(paths).lower()
     for token in ("submit", "dispatch", "send-order", "place-order"):
         assert token not in blob

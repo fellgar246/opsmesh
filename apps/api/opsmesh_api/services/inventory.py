@@ -26,16 +26,7 @@ class InventoryService:
         stock = self._stock(tenant_id, sku, region)
         if stock.reserved > stock.on_hand:
             raise StockConflictError(on_hand=stock.on_hand, reserved=stock.reserved)
-        return InventorySnapshot(
-            tenant_id=stock.tenant_id,
-            sku=stock.sku,
-            region=stock.region,
-            on_hand_units=stock.on_hand,
-            reserved_units=stock.reserved,
-            available_units=stock.available,
-            reorder_point_units=stock.reorder_point,
-            observed_at=stock.observed_at,
-        )
+        return self._snapshot(stock)
 
     def get_reorder_parameters(self, tenant_id: str, sku: str, region: str) -> ReorderParameters:
         stock = self._stock(tenant_id, sku, region)
@@ -47,6 +38,20 @@ class InventoryService:
             safety_stock_units=stock.safety_stock,
             observed_at=stock.observed_at,
         )
+
+    def list_snapshots_for_sku(self, tenant_id: str, sku: str) -> list[InventorySnapshot]:
+        _require_tenant(self._db, tenant_id)
+        rows = self._db.scalars(
+            select(SkuStock)
+            .where(SkuStock.tenant_id == tenant_id, SkuStock.sku == sku)
+            .order_by(SkuStock.region)
+        ).all()
+        snapshots: list[InventorySnapshot] = []
+        for stock in rows:
+            if stock.reserved > stock.on_hand:
+                raise StockConflictError(on_hand=stock.on_hand, reserved=stock.reserved)
+            snapshots.append(self._snapshot(stock))
+        return snapshots
 
     def get_stockout_history(self, tenant_id: str, sku: str, region: str) -> StockoutList:
         self._stock(tenant_id, sku, region)
@@ -72,6 +77,18 @@ class InventoryService:
                 )
                 for row in rows
             ]
+        )
+
+    def _snapshot(self, stock: SkuStock) -> InventorySnapshot:
+        return InventorySnapshot(
+            tenant_id=stock.tenant_id,
+            sku=stock.sku,
+            region=stock.region,
+            on_hand_units=stock.on_hand,
+            reserved_units=stock.reserved,
+            available_units=stock.available,
+            reorder_point_units=stock.reorder_point,
+            observed_at=stock.observed_at,
         )
 
     def _stock(self, tenant_id: str, sku: str, region: str) -> SkuStock:
