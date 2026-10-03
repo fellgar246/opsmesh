@@ -416,9 +416,10 @@ def test_http_lists_runs_newest_first_for_the_selected_tenant(
     assert all(item["tenant_id"] == NORTHWIND for item in response.json()["workflow_runs"])
 
     other = client.get(f"/tenants/{CONTOSO}/workflow-runs")
-    other_ids = [item["id"] for item in other.json()["workflow_runs"]]
-    assert str(newer.id) not in other_ids
-    assert str(older.id) not in other_ids
+    assert other.status_code == 404
+    assert other.json() == {"detail": "Not found"}
+    assert str(newer.id) not in other.text
+    assert str(older.id) not in other.text
 
 
 def test_http_lists_tenants(client: TestClient) -> None:

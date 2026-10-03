@@ -34,6 +34,7 @@ class PurchaseOrderStatus(StrEnum):
     CANCELLED = "cancelled"
     DRAFT = "draft"
     WAITING_APPROVAL = "waiting_approval"
+    SUBMITTED = "submitted"
 
 
 _PURCHASE_ORDER_STATUSES = ", ".join(f"'{item.value}'" for item in PurchaseOrderStatus)

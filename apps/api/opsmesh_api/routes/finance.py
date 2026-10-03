@@ -7,10 +7,15 @@ from sqlalchemy.orm import Session
 
 from opsmesh_api.db import get_db
 from opsmesh_api.routes.errors import call
+from opsmesh_api.routes.security import bind_tenant
 from opsmesh_api.services.finance import FinanceService
 from opsmesh_api.services.schemas import BudgetRead, CommittedSpendRead, PurchaseImpactRead
 
-router = APIRouter(prefix="/tenants/{tenant_id}/finance", tags=["finance"])
+router = APIRouter(
+    prefix="/tenants/{tenant_id}/finance",
+    tags=["finance"],
+    dependencies=[Depends(bind_tenant)],
+)
 
 
 def _service(db: Annotated[Session, Depends(get_db)]) -> FinanceService:

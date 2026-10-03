@@ -1,6 +1,6 @@
 """Run reorder, supplier-delay, and budget-plan workflows as ordinary code."""
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from time import perf_counter
 from typing import Any
 from uuid import UUID, uuid4
@@ -24,6 +24,7 @@ from opsmesh_api.agents.planner import (
 )
 from opsmesh_api.agents.planner import PlanCandidate as PlannerCandidate
 from opsmesh_api.agents.stubs import StubAgentClient
+from opsmesh_api.approvals.engine import APPROVAL_TTL as _APPROVAL_TTL
 from opsmesh_api.operations.policy import REASON_MISSING_EVIDENCE, approval_for_total
 from opsmesh_api.operations.quantity import select_demand
 from opsmesh_api.operations.risk import classify_stockout_risk, stockout_risk_score
@@ -69,7 +70,6 @@ from opsmesh_api.workflows.store import WorkflowStore
 
 # Delay impact has no analyst service level, so the selected forecast is P50.
 _DELAY_SERVICE_LEVEL = 0.50
-_APPROVAL_TTL = timedelta(days=7)
 
 
 class OperationalEngine:

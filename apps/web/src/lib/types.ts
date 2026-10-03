@@ -84,6 +84,30 @@ export type Evidence = {
   checksum: string;
 };
 
+export type ApprovalItem = {
+  id: string;
+  proposal_id: string;
+  workflow_run_id: string;
+  arguments_hash: string;
+  live_arguments_hash: string;
+  required_role: string;
+  status: string;
+  expires_at: string;
+  approved_by: string | null;
+  proposal_status: string;
+  quantity: number | null;
+  sku: string | null;
+  supplier_id: string | null;
+  extended_cost_cents: number | null;
+  requested_at: string;
+  workflow_type: string;
+  requested_by: string;
+};
+
+export type ApprovalDetail = ApprovalItem & {
+  proposal_approvals: ApprovalItem[];
+};
+
 export type Approval = {
   id: string;
   proposal_id: string;
@@ -121,6 +145,15 @@ export type WorkflowRun = {
   tasks: AgentTask[];
   evidence: Evidence[];
   proposals: Proposal[];
+};
+
+export type AuditEvent = {
+  event_id: string;
+  event_type: string;
+  tenant_id: string;
+  workflow_id: string;
+  occurred_at: string;
+  payload: Record<string, unknown>;
 };
 
 export type Tenant = {

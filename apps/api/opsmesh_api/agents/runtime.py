@@ -23,6 +23,7 @@ from opsmesh_api.agents.contracts import (
     AgentTask,
     AgentType,
 )
+from opsmesh_api.identity.access import agent_principal_for, distinct_agent_identity
 from opsmesh_api.workflows.models import Confidence
 from opsmesh_api.workflows.schemas import WarningItem
 
@@ -140,6 +141,8 @@ def task_payload(task: AgentTask, caller_credential: str | None) -> dict[str, An
     for key, value in parameters.items():
         if key in _CREDENTIAL_KEYS:
             continue
+        if key == "tenant_id" and value != task.tenant_id:
+            continue
         if caller_credential is not None and value == caller_credential:
             continue
         cleaned[key] = value
@@ -206,13 +209,16 @@ class RemoteAgentClient:
             return _failed(task, "transport", "The specialist has no runtime endpoint.")
         if self._timeout_seconds <= 0:
             return _failed(task, "timeout", _TIMEOUT_MESSAGE)
-        identity = self._identities.get(task.agent) or f"opsmesh/{task.agent.value}"
-        if self._caller_credential is not None and identity == self._caller_credential:
-            identity = f"opsmesh/{task.agent.value}"
+        configured = self._identities.get(task.agent) or f"opsmesh/{task.agent.value}"
+        principal = agent_principal_for(
+            task.agent.value,
+            distinct_agent_identity(task.agent.value, configured, self._caller_credential),
+            task.tenant_id,
+        )
         request = RuntimeInvocation(
             agent=task.agent,
             endpoint_id=endpoint.endpoint_id,
-            agent_identity=identity,
+            agent_identity=principal.runtime_identity,
             qualifier=self._qualifier,
             session_id=session_id_for(task.task_id),
             timeout_seconds=self._timeout_seconds,

@@ -280,7 +280,7 @@ def procurement_create_draft(db: Session, tenant_id: str, args: BaseModel) -> Ha
 
 
 def procurement_submit_for_approval(db: Session, tenant_id: str, args: BaseModel) -> HandlerResult:
-    """Park a draft for approval. The proposal is not marked approved."""
+    """Advance a draft when required approvals match the live proposal hash."""
 
     parsed = _expect(args, SubmitPurchaseOrderArgs)
     order = ProcurementService(db).submit_purchase_order_for_approval(

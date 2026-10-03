@@ -5,7 +5,8 @@ import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { OperationsConsole } from "@/components/operations-console";
-import { ApprovalList, ProposalList, WorkflowList } from "@/components/lists";
+import { ApprovalList } from "@/components/approvals";
+import { ProposalList, WorkflowList } from "@/components/lists";
 import { CostPage } from "@/components/lists";
 import { TaskGraph } from "@/components/task-graph";
 import { WorkflowDetail } from "@/components/workflow-detail";
@@ -15,8 +16,9 @@ import type { AgentTask, WorkflowRun } from "@/lib/types";
 const push = vi.fn();
 
 vi.mock("next/navigation", () => ({
-  useRouter: () => ({ push }),
+  useRouter: () => ({ push, replace: vi.fn() }),
   usePathname: () => "/workflows",
+  useSearchParams: () => new URLSearchParams(),
 }));
 
 const runId = "11111111-1111-4111-8111-111111111111";
@@ -135,17 +137,33 @@ function renderConsole(ui: ReactNode) {
   );
 }
 
+function sessionResponse(input: RequestInfo | URL): Response | null {
+  if (!String(input).endsWith("/auth/session")) return null;
+  return json({
+    access_token: "local-test-token",
+    token_type: "Bearer",
+    user_id: "analyst@northwind.example",
+    tenant_id: "northwind",
+    roles: ["operations_analyst"],
+  });
+}
+
 beforeEach(() => {
   push.mockReset();
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const session = sessionResponse(input);
+      if (session) return session;
       const url = String(input);
       if (url.endsWith("/tenants")) {
         return json({ tenants: [{ tenant_id: "northwind", name: "Northwind" }] });
       }
       if (url.endsWith("/workflow-runs") && (!init || init.method === undefined)) {
         return json({ workflow_runs: [] });
+      }
+      if (url.includes("/approvals")) {
+        return json({ approvals: [] });
       }
       if (url.endsWith("/operations/reorder") && init?.method === "POST") {
         return json({
@@ -180,6 +198,12 @@ describe("operations console", () => {
     await user.type(screen.getByLabelText("Service level"), "0.90");
     await user.click(screen.getByRole("button", { name: "Run workflow" }));
     expect(push).toHaveBeenCalledWith(`/workflows/${runId}`);
+    const reorder = vi.mocked(fetch).mock.calls.find((call) =>
+      String(call[0]).includes("/operations/reorder"),
+    );
+    const headers = reorder?.[1]?.headers as Record<string, string> | undefined;
+    expect(headers?.authorization).toBe("Bearer local-test-token");
+    expect(headers?.["x-opsmesh-role"]).toBeUndefined();
 
     renderConsole(<WorkflowDetail runId={runId} />);
     expect(await screen.findByTestId("proposal-quantity")).toHaveTextContent("250 units");
@@ -202,13 +226,15 @@ describe("operations console", () => {
     renderConsole(<ProposalList />);
     expect(await screen.findByText("No proposals yet")).toBeInTheDocument();
     renderConsole(<ApprovalList />);
-    expect(await screen.findByText("No approvals yet")).toBeInTheDocument();
+    expect(await screen.findByText("No approvals need your decision")).toBeInTheDocument();
   });
 
   it("shows a readable error when the workflow list fails", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
+        const session = sessionResponse(input);
+        if (session) return session;
         const url = String(input);
         if (url.endsWith("/tenants")) {
           return json({ tenants: [{ tenant_id: "northwind", name: "Northwind" }] });
@@ -230,6 +256,8 @@ describe("operations console", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
+        const session = sessionResponse(input);
+        if (session) return session;
         const url = String(input);
         if (url.endsWith("/tenants")) {
           return json({ tenants: [{ tenant_id: "northwind", name: "Northwind" }] });

@@ -256,6 +256,30 @@ class Approval(Base):
     approved_by: Mapped[str | None] = mapped_column(String(200), nullable=True)
 
 
+class AuditRecord(Base):
+    """Who decided, when, and which proposal arguments the decision covered."""
+
+    __tablename__ = "audit_records"
+    __table_args__ = (Index("ix_audit_records_proposal", "tenant_id", "proposal_id"),)
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.tenant_id"))
+    actor: Mapped[str] = mapped_column(String(200))
+    occurred_at: Mapped[datetime] = mapped_column(UtcDateTime)
+    action: Mapped[str] = mapped_column(String(64))
+    proposal_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("operational_proposals.id"),
+    )
+    arguments_hash: Mapped[str] = mapped_column(String(64))
+    approval_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("approvals.id"),
+        nullable=True,
+    )
+    detail: Mapped[str | None] = mapped_column(String(2000), nullable=True)
+
+
 class ToolExecution(Base):
     """Append-only record of one tool call."""
 

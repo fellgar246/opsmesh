@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session
 from opsmesh_api.agents.ceilings import MAX_TASK_RETRIES, TASK_TIMEOUT_SECONDS
 from opsmesh_api.agents.contracts import AgentType
 from opsmesh_api.agents.prompts import CONVERSION_ORDER
+from opsmesh_api.identity.access import distinct_agent_identity
 from opsmesh_api.settings import Settings
 from opsmesh_api.tools.catalog import READ_TOOL_SPECS, WRITE_TOOL_SPECS
 from opsmesh_api.tools.port import (
@@ -253,14 +254,18 @@ def build_gateway_request(
     config: GatewaySpecialistConfig,
     *,
     database_url: str,
+    end_user_token: str | None = None,
 ) -> GatewayToolRequest:
     """Build an outbound call whose credential is scoped to the agent and tool."""
 
     outbound = config.identity_for(call.agent, call.tool_name)
-    if _leaks_business_credential(outbound.credential, database_url):
+    identity = distinct_agent_identity(call.agent.value, outbound.identity, end_user_token)
+    if _leaks_business_credential(f"{identity}:{call.tool_name}", database_url):
+        identity = f"opsmesh/{call.agent.value}"
+    if identity != outbound.identity:
         outbound = OutboundAgentIdentity(
             agent=call.agent,
-            identity=f"opsmesh/{call.agent.value}",
+            identity=identity,
             tool_name=call.tool_name,
         )
     return GatewayToolRequest(

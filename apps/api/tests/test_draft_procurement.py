@@ -29,7 +29,6 @@ from opsmesh_api.tools.schemas import (
     DraftPurchaseOrderArgs,
     validated_arguments_hash,
 )
-from opsmesh_api.workflows.hashing import canonical_json_hash
 from opsmesh_api.workflows.models import OperationalProposal, ProposalStatus, ToolStatus
 from opsmesh_api.workflows.schemas import (
     AgentTaskCreate,
@@ -552,7 +551,7 @@ def test_a_stored_order_is_returned_when_the_idempotency_record_is_missing(
         assert record.result_reference == order_id
 
 
-def test_submit_parks_the_golden_draft_without_approving_it(
+def test_submit_does_not_approve_the_golden_draft_without_a_decision(
     client: TestClient,
     session_factory: sessionmaker[Session],
 ) -> None:
@@ -576,35 +575,24 @@ def test_submit_parks_the_golden_draft_without_approving_it(
         )
         assert created.data is not None
         order_id = str(created.data["purchase_order_id"])
-        submit_arguments = {
-            "purchase_order_id": order_id,
-            "idempotency_key": "submit-key",
-        }
-        first = registry.invoke(
+        denied = registry.invoke(
             _call(
                 NORTHWIND,
                 run_id,
                 task_id,
                 AgentType.PROCUREMENT_EXECUTOR,
                 SUBMIT_FOR_APPROVAL_TOOL,
-                submit_arguments,
+                {
+                    "purchase_order_id": order_id,
+                    "idempotency_key": "submit-key",
+                },
             )
         )
-        second = registry.invoke(
-            _call(
-                NORTHWIND,
-                run_id,
-                task_id,
-                AgentType.PROCUREMENT_EXECUTOR,
-                SUBMIT_FOR_APPROVAL_TOOL,
-                submit_arguments,
-            )
-        )
-        assert first.status == ToolStatus.SUCCEEDED
-        assert first.data is not None
-        assert second.data is not None
-        assert first.data["status"] == "waiting_approval"
-        assert first.data["purchase_order_id"] == second.data["purchase_order_id"] == order_id
+        assert denied.status == ToolStatus.FAILED
+        assert denied.error_code == "approval_required"
+        stored_order = db.get(PurchaseOrder, order_id)
+        assert stored_order is not None
+        assert stored_order.status == PurchaseOrderStatus.DRAFT.value
         stored = db.get(OperationalProposal, proposal_id)
         assert stored is not None
         assert stored.status == ProposalStatus.PENDING_APPROVAL.value
@@ -612,12 +600,7 @@ def test_submit_parks_the_golden_draft_without_approving_it(
         record = db.scalar(
             select(IdempotencyRecord).where(IdempotencyRecord.idempotency_key == "submit-key")
         )
-        assert record is not None
-        assert record.arguments_hash == canonical_json_hash(submit_arguments)
-        assert record.result_reference == order_id
-    fetched = client.get(f"/tenants/{NORTHWIND}/procurement/purchase-orders/{order_id}")
-    assert fetched.status_code == 200
-    assert fetched.json()["status"] == "waiting_approval"
+        assert record is None
 
 
 def test_submit_leaves_a_small_proposal_unapproved(

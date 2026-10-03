@@ -17,9 +17,14 @@ from opsmesh_api.operations.schemas import (
     SupplierDelayRequest,
 )
 from opsmesh_api.routes.errors import call
+from opsmesh_api.routes.security import require_workflow_start
 from opsmesh_api.settings import Settings, get_settings
 
-router = APIRouter(prefix="/tenants/{tenant_id}/operations", tags=["operations"])
+router = APIRouter(
+    prefix="/tenants/{tenant_id}/operations",
+    tags=["operations"],
+    dependencies=[Depends(require_workflow_start)],
+)
 
 
 def _engine(

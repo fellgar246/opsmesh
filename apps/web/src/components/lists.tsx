@@ -10,7 +10,7 @@ import { workflowOutcome, workflowTitle } from "@/components/workflow-detail";
 import { listWorkflows } from "@/lib/api";
 import { formatMoneyCents, formatRelative } from "@/lib/format";
 import { workflowCeilings } from "@/lib/identity";
-import { approvalStatusLabels, proposalStatusLabels, roleLabels } from "@/lib/labels";
+import { proposalStatusLabels } from "@/lib/labels";
 import { useSession } from "@/lib/session";
 import type { WorkflowRun } from "@/lib/types";
 
@@ -113,73 +113,6 @@ export function ProposalList() {
                       </Link>
                     </td>
                     <td className="px-3 py-2">{formatRelative(proposal.created_at)}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </div>
-  );
-}
-
-export function ApprovalList() {
-  const query = useRuns();
-  if (query.isLoading) return <LoadingRows />;
-  if (query.error) {
-    return (
-      <ErrorState title="Couldn't load approvals" message={query.error.message} onRetry={() => void query.refetch()} />
-    );
-  }
-  const rows = (query.data?.workflow_runs ?? []).flatMap((run) =>
-    run.proposals.flatMap((proposal) =>
-      proposal.approvals.map((approval) => ({ approval, proposal, run })),
-    ),
-  );
-  return (
-    <div>
-      <h1 className="text-xl font-semibold">Approvals</h1>
-      <p className="mt-2 max-w-xl text-muted">
-        This page lists persisted approvals. Decisions are not available yet.
-      </p>
-      {rows.length === 0 ? (
-        <div className="mt-4">
-          <EmptyState
-            title="No approvals yet"
-            body="Run a reorder recommendation to see agents, evidence and the proposal here."
-          />
-        </div>
-      ) : (
-        <div className="mt-4 overflow-auto rounded-lg border border-line">
-          <table className="w-full border-collapse text-left text-[13px]">
-            <thead className="bg-sunken text-muted">
-              <tr>
-                {["Proposal", "Required role", "Status", "Workflow"].map((heading) => (
-                  <th key={heading} scope="col" className="px-3 py-2 font-medium">
-                    {heading}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map(({ approval, run }) => {
-                const status = approvalStatusLabels[approval.status] ?? {
-                  label: approval.status,
-                  tone: "neutral",
-                };
-                return (
-                  <tr key={approval.id} className="border-t border-line">
-                    <td className="px-3 py-2">{workflowOutcome(run)}</td>
-                    <td className="px-3 py-2">{roleLabels[approval.required_role] ?? approval.required_role}</td>
-                    <td className="px-3 py-2">
-                      <StatusBadge status={approval.status} label={status.label} tone={status.tone} />
-                    </td>
-                    <td className="px-3 py-2">
-                      <Link href={`/workflows/${run.id}`} className="text-accent">
-                        Open workflow
-                      </Link>
-                    </td>
                   </tr>
                 );
               })}

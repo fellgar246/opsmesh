@@ -44,10 +44,19 @@ class Settings(BaseSettings):
     # agent=identity pairs. Empty uses opsmesh/<agent> for each specialist.
     tool_gateway_identities: str = ""
     tool_gateway_protocol_version: str = "2026-07-28"
+    cloud_event_bus_enabled: bool = False
+    event_bus_name: str = ""
+    event_queue_url: str = ""
     managed_retrieval_enabled: bool = False
     long_term_memory_enabled: bool = False
     automatic_schedules_enabled: bool = False
     database_url: str = "postgresql+psycopg://opsmesh:opsmesh@localhost:5433/opsmesh"
+    cognito_user_pool_id: str = ""
+    cognito_region: str = "us-east-1"
+    cognito_client_id: str = ""
+    # Empty keeps tenant admin inside one tenant. A separate name is cross-tenant.
+    platform_role: str = ""
+    local_identity_secret: str = "opsmesh-local-development-identity"
 
     @property
     def effective_execution_profile(self) -> ExecutionProfile:
@@ -58,6 +67,12 @@ class Settings(BaseSettings):
     @property
     def local_deterministic_simulation(self) -> bool:
         return not self.aws_agentic_features_enabled
+
+    @property
+    def uses_local_identity(self) -> bool:
+        """The local profile signs tokens itself. Other profiles use Cognito."""
+
+        return self.effective_execution_profile == "local"
 
     def cloud_capability(self, requested: bool) -> bool:
         """Return whether a cloud capability is actually on.

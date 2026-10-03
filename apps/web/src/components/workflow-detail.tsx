@@ -104,6 +104,14 @@ function WorkflowBody({
       <div className="mt-2 flex flex-wrap items-center gap-3">
         <h1 className="text-xl font-semibold">{title}</h1>
         <StatusBadge status={run.status} label={status.label} tone={status.tone} />
+        {proposal?.approvals.some((item) => item.status === "PENDING") ? (
+          <Link
+            href={`/approvals/${proposal.approvals.find((item) => item.status === "PENDING")?.id}`}
+            className="inline-flex h-8 items-center rounded-md bg-accent px-3 text-accent-fg"
+          >
+            Review approval
+          </Link>
+        ) : null}
         {refreshing ? <span className="text-[12px] text-muted">Updating</span> : null}
       </div>
       <p className="mt-2 text-[13px] text-muted">

@@ -7,10 +7,15 @@ from sqlalchemy.orm import Session
 
 from opsmesh_api.db import get_db
 from opsmesh_api.routes.errors import call
+from opsmesh_api.routes.security import bind_tenant
 from opsmesh_api.services.forecast import ForecastService
 from opsmesh_api.services.schemas import DemandDriversRead, ForecastQualityRead, ForecastRead
 
-router = APIRouter(prefix="/tenants/{tenant_id}/forecasts", tags=["forecast"])
+router = APIRouter(
+    prefix="/tenants/{tenant_id}/forecasts",
+    tags=["forecasts"],
+    dependencies=[Depends(bind_tenant)],
+)
 
 
 def _service(db: Annotated[Session, Depends(get_db)]) -> ForecastService:

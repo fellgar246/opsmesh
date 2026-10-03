@@ -10,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from opsmesh_api.agents.contracts import AgentType
+from opsmesh_api.identity.access import allow
 from opsmesh_api.services.errors import NotFoundError, ProcurementWriteError, StockConflictError
 from opsmesh_api.tools.catalog import READ_TOOL_SPECS, WRITE_TOOL_SPECS, ToolSpec
 from opsmesh_api.tools.port import (
@@ -49,9 +50,20 @@ class LocalToolRegistry:
     def invoke(self, call: ToolCall) -> ToolResult:
         """Validate and authorize one call, then persist the invocation."""
 
-        task = self._task(call)
-        if task is None:
+        stored = self._stored_task(call)
+        if stored is None:
             raise ToolTaskNotFound(call.task_id)
+        if stored.tenant_id != call.tenant_id:
+            anchored = call.model_copy(update={"tenant_id": stored.tenant_id})
+            started = perf_counter()
+            return self._fail(
+                anchored,
+                started,
+                canonical_json_hash(call.arguments),
+                error_code="denied",
+                error_message="The tenant does not match the task.",
+            )
+        task = stored
         started = perf_counter()
         arguments_hash = canonical_json_hash(call.arguments)
         if task.agent_type != call.agent.value:
@@ -83,16 +95,24 @@ class LocalToolRegistry:
                 error_message=message,
                 error_field=field,
             )
-        if call.agent not in spec.permitted_agents:
-            return self._fail(
-                call,
-                started,
-                arguments_hash,
-                error_code="denied",
-                error_message="The agent is not allowed to call this tool.",
-            )
         tenant_argument = getattr(parsed, "tenant_id", None)
-        if isinstance(tenant_argument, str) and tenant_argument != call.tenant_id:
+        tenant_matches = not (
+            isinstance(tenant_argument, str) and tenant_argument != call.tenant_id
+        )
+        if not allow(
+            user=True,
+            agent=call.agent in spec.permitted_agents,
+            tool=True,
+            policy=tenant_matches,
+        ):
+            if call.agent not in spec.permitted_agents:
+                return self._fail(
+                    call,
+                    started,
+                    arguments_hash,
+                    error_code="denied",
+                    error_message="The agent is not allowed to call this tool.",
+                )
             return self._fail(
                 call,
                 started,
@@ -163,11 +183,12 @@ class LocalToolRegistry:
             raise ToolRegistrationError("Tool names must be unique and stable.")
         self._specs[spec.name] = spec
 
-    def _task(self, call: ToolCall) -> AgentTask | None:
+    def _stored_task(self, call: ToolCall) -> AgentTask | None:
+        """Find the workflow task. The supplied tenant is not part of the lookup."""
+
         return self._db.scalar(
             select(AgentTask).where(
                 AgentTask.id == call.task_id,
-                AgentTask.tenant_id == call.tenant_id,
                 AgentTask.workflow_run_id == call.workflow_run_id,
             )
         )

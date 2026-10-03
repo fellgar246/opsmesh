@@ -8,7 +8,9 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from opsmesh_api.operations.policy import approval_for_total
+from opsmesh_api.approvals.engine import assess_submit, audit_submission, expire_approvals
+from opsmesh_api.events.dispatch import publish_ready
+from opsmesh_api.events.recording import record_draft_purchase_order
 from opsmesh_api.services.errors import NotFoundError, ProcurementWriteError
 from opsmesh_api.services.models import (
     IdempotencyRecord,
@@ -22,6 +24,13 @@ from opsmesh_api.services.schemas import PurchaseOrderList, PurchaseOrderRead
 from opsmesh_api.tools.schemas import CREATE_DRAFT_TOOL, SUBMIT_FOR_APPROVAL_TOOL
 from opsmesh_api.workflows.hashing import canonical_json_hash
 from opsmesh_api.workflows.models import OperationalProposal, ProposalStatus
+
+_SUBMITTABLE = frozenset(
+    {
+        PurchaseOrderStatus.DRAFT.value,
+        PurchaseOrderStatus.WAITING_APPROVAL.value,
+    }
+)
 
 _COMMERCIAL_FIELDS = ("quantity", "sku", "supplier_id", "unit_cost_cents")
 _DRAFTABLE_PROPOSALS = frozenset(
@@ -112,10 +121,20 @@ class ProcurementService:
         self._db.add(order)
         self._db.flush()
         self._db.add(record)
+        record_draft_purchase_order(
+            self._db,
+            tenant_id=tenant_id,
+            workflow_id=proposal.workflow_run_id,
+            purchase_order_id=purchase_order_id,
+            proposal_id=proposal_id,
+            occurred_at=datetime.now(UTC),
+        )
         stored = self._commit_new(tenant_id, idempotency_key, CREATE_DRAFT_TOOL, arguments_hash)
         if stored is not None:
             return stored
-        return _order(order)
+        created = _order(order)
+        publish_ready(self._db)
+        return created
 
     def submit_purchase_order_for_approval(
         self,
@@ -125,7 +144,12 @@ class ProcurementService:
         idempotency_key: str,
         arguments_hash: str,
     ) -> PurchaseOrderRead:
-        """Move a draft to waiting for approval. This does not approve the proposal."""
+        """Advance a draft after each required approval matches the live proposal hash.
+
+        A proposal that does not require approval is parked waiting. A required
+        approval that is missing, rejected, expired, or bound to different
+        arguments leaves the draft unchanged.
+        """
 
         replay = self._replay(
             tenant_id,
@@ -136,7 +160,7 @@ class ProcurementService:
         if replay is not None:
             return replay
         order = self._find_order(tenant_id, purchase_order_id)
-        if order is None or order.status != PurchaseOrderStatus.DRAFT.value:
+        if order is None or order.status not in _SUBMITTABLE:
             raise ProcurementWriteError("denied", "The purchase order is not a draft.")
         proposal_id = order.proposal_id
         unit_cost_cents = order.unit_cost_cents
@@ -145,10 +169,25 @@ class ProcurementService:
         proposal = self._proposal(tenant_id, proposal_id)
         if proposal is None:
             raise ProcurementWriteError("denied", "The proposal does not exist.")
-        requires_manager, requires_finance = approval_for_total(order.quantity * unit_cost_cents)
-        if (requires_manager or requires_finance) and proposal.status == ProposalStatus.DRAFT.value:
-            proposal.status = ProposalStatus.PENDING_APPROVAL.value
-        order.status = PurchaseOrderStatus.WAITING_APPROVAL.value
+        assessment = assess_submit(self._db, proposal)
+        if assessment.expire_ids:
+            expire_approvals(self._db, assessment.expire_ids)
+        if not assessment.allowed:
+            if assessment.code == "approval_expired":
+                proposal.status = ProposalStatus.EXPIRED.value
+            elif (
+                assessment.code == "approval_hash_mismatch"
+                and proposal.status == ProposalStatus.APPROVED.value
+            ):
+                proposal.status = ProposalStatus.PENDING_APPROVAL.value
+            self._db.commit()
+            raise ProcurementWriteError(assessment.code, assessment.message)
+        if assessment.advance:
+            order.status = PurchaseOrderStatus.SUBMITTED.value
+            proposal.status = ProposalStatus.APPROVED.value
+            audit_submission(self._db, proposal)
+        else:
+            order.status = PurchaseOrderStatus.WAITING_APPROVAL.value
         self._db.add(
             _record(
                 tenant_id,

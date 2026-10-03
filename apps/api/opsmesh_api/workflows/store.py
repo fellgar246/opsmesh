@@ -1,6 +1,6 @@
 """Insert and tenant-scoped reads for workflow records."""
 
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -10,6 +10,15 @@ from sqlalchemy.orm import Session
 from opsmesh_api.agents.ceilings import MAX_TASK_RETRIES
 from opsmesh_api.agents.plan_schema import SupervisorPlan, validate_plan
 from opsmesh_api.agents.transitions import IllegalTransition, assert_transition
+from opsmesh_api.events.dispatch import publish_ready
+from opsmesh_api.events.recording import (
+    record_approval_requested,
+    record_inserted_task,
+    record_proposal,
+    record_run_opened,
+    record_run_status,
+    record_task_status,
+)
 from opsmesh_api.services.models import Tenant
 from opsmesh_api.workflows.errors import PersistenceRejected, WorkflowNotFound
 from opsmesh_api.workflows.hashing import canonical_json_hash
@@ -17,6 +26,7 @@ from opsmesh_api.workflows.models import (
     AgentResult,
     AgentTask,
     Approval,
+    ApprovalStatus,
     Evidence,
     OperationalProposal,
     ProposalStatus,
@@ -71,7 +81,10 @@ class WorkflowStore:
             plan=stored_plan,
             reason=body.reason,
         )
-        self._insert(row)
+        self._db.add(row)
+        self._db.flush()
+        record_run_opened(self._db, row)
+        self._commit_published(row)
         return self.get_run(tenant_id, body.id)
 
     def add_task(self, tenant_id: str, run_id: UUID, body: AgentTaskCreate) -> AgentTaskRead:
@@ -96,6 +109,7 @@ class WorkflowStore:
             finished_at=body.finished_at,
             retry_count=0,
         )
+        record_inserted_task(self._db, row)
         self._insert(row)
         stored = self._task(tenant_id, run_id, body.id)
         assert stored is not None
@@ -193,6 +207,7 @@ class WorkflowStore:
             status=body.status.value,
             created_at=body.created_at,
         )
+        record_proposal(self._db, row)
         self._insert(row)
         return self._proposal_read(row, [])
 
@@ -212,6 +227,10 @@ class WorkflowStore:
         )
         if proposal is None:
             raise PersistenceRejected("proposal does not exist")
+        if body.status != ApprovalStatus.PENDING:
+            raise PersistenceRejected("Only a pending approval can be recorded here.")
+        if body.approved_by is not None:
+            raise PersistenceRejected("A pending approval has no approver.")
         row = Approval(
             id=body.id,
             tenant_id=tenant_id,
@@ -222,6 +241,7 @@ class WorkflowStore:
             expires_at=body.expires_at,
             approved_by=body.approved_by,
         )
+        record_approval_requested(self._db, row, run_id, datetime.now(UTC))
         self._insert(row)
         return self._approval_read(row)
 
@@ -297,8 +317,8 @@ class WorkflowStore:
                 occurred_at=at,
             )
         )
-        self._db.commit()
-        self._db.refresh(row)
+        record_task_status(self._db, row, status, reason, at)
+        self._commit_published(row)
 
     def set_retry_count(self, tenant_id: str, run_id: UUID, task_id: UUID, count: int) -> None:
         """Commit how many retries a task has used. The ceiling is 2."""
@@ -310,6 +330,7 @@ class WorkflowStore:
             raise PersistenceRejected("task does not exist")
         row.retry_count = count
         self._db.commit()
+        publish_ready(self._db)
 
     def update_run(
         self,
@@ -325,6 +346,7 @@ class WorkflowStore:
         """Commit workflow status, reason, and cost after task transitions."""
 
         run = self._require_run(tenant_id, run_id)
+        previous = WorkflowStatus(run.status)
         if status is not None:
             run.status = status.value
         if write_reason:
@@ -333,7 +355,16 @@ class WorkflowStore:
             run.finished_at = finished_at
         if cost_summary is not None:
             run.cost_summary = cost_summary
+        if status is not None and status != previous:
+            record_run_status(
+                self._db,
+                run,
+                status,
+                run.reason,
+                finished_at if finished_at is not None else datetime.now(UTC),
+            )
         self._db.commit()
+        publish_ready(self._db)
 
     def list_runs(self, tenant_id: str) -> list[WorkflowRunRead]:
         """Return persisted runs for one tenant, newest start time first."""
@@ -494,8 +525,12 @@ class WorkflowStore:
 
     def _insert(self, row: object) -> None:
         self._db.add(row)
+        self._commit_published(row)
+
+    def _commit_published(self, row: object) -> None:
         self._db.commit()
         self._db.refresh(row)
+        publish_ready(self._db)
 
     def _task_read(
         self,

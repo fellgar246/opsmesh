@@ -7,7 +7,9 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from opsmesh_api.db import get_db
+from opsmesh_api.identity.principal import Principal
 from opsmesh_api.routes.errors import call
+from opsmesh_api.routes.security import bind_tenant, require_workflow_start
 from opsmesh_api.workflows.schemas import (
     AgentResultCreate,
     AgentResultRead,
@@ -27,7 +29,11 @@ from opsmesh_api.workflows.schemas import (
 )
 from opsmesh_api.workflows.store import WorkflowStore
 
-router = APIRouter(prefix="/tenants/{tenant_id}/workflow-runs", tags=["workflows"])
+router = APIRouter(
+    prefix="/tenants/{tenant_id}/workflow-runs",
+    tags=["workflows"],
+    dependencies=[Depends(bind_tenant)],
+)
 
 
 def _store(db: Annotated[Session, Depends(get_db)]) -> WorkflowStore:
@@ -47,6 +53,7 @@ def create_run(
     tenant_id: str,
     body: WorkflowRunCreate,
     store: Annotated[WorkflowStore, Depends(_store)],
+    _principal: Annotated[Principal, Depends(require_workflow_start)],
 ) -> WorkflowRunRead:
     return call(lambda: store.create_run(tenant_id, body))
 

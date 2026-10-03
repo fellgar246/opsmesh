@@ -5,7 +5,9 @@ description = "OpsMesh control-plane API"
 requires-python = ">=3.12"
 dependencies = [
   "alembic>=1.14",
+  "cryptography>=43",
   "fastapi>=0.115",
+  "pyjwt>=2.10",
   "psycopg[binary]>=3.2",
   "pydantic>=2",
   "pydantic-settings>=2",
@@ -45,3 +47,6 @@ mypy_path = "."
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+  "integration: calls a hosted identity service and is skipped unless explicitly enabled",
+]

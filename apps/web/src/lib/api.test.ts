@@ -21,4 +21,16 @@ describe("API errors", () => {
     const error = parseApiError(422, { detail: "tenant does not exist" });
     expect(error.message).toBe("tenant does not exist");
   });
+
+  it("reads an approval conflict message", () => {
+    const error = parseApiError(409, {
+      detail: {
+        code: "approval_conflict",
+        message: "This proposal was already approved by manager@northwind.example.",
+      },
+    });
+    expect(error.status).toBe(409);
+    expect(error.code).toBe("approval_conflict");
+    expect(error.message).toMatch(/already approved/);
+  });
 });

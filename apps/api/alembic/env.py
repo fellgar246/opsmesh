@@ -2,6 +2,7 @@
 
 from logging.config import fileConfig
 
+import opsmesh_api.events.models  # noqa: F401
 import opsmesh_api.services.models  # noqa: F401
 import opsmesh_api.workflows.models  # noqa: F401
 from alembic import context
