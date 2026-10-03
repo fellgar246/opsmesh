@@ -1,5 +1,6 @@
 """Argument models for read-only tools. The task tenant is authoritative."""
 
+from datetime import date
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -41,12 +42,17 @@ class PurchaseOrderArgs(ToolArgs):
 
 
 class PolicySearchArgs(ToolArgs):
+    """Facts that select passages. The response is citations, not an approval flag."""
+
     extended_cost_cents: int | None = Field(default=None, ge=0)
     supplier_status: Literal["approved", "unapproved"] | None = None
     quantity: int | None = Field(default=None, ge=0)
     minimum_order_quantity: int | None = Field(default=None, ge=1)
     case_pack: int | None = Field(default=None, ge=1)
     available_cents: int | None = Field(default=None, ge=0)
+    query: str | None = Field(default=None, min_length=1, max_length=500)
+    as_of: date | None = None
+    max_passages: int | None = Field(default=None, ge=1)
 
 
 class ApprovalRequirementArgs(ToolArgs):

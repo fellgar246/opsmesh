@@ -1,22 +1,19 @@
 """Read-only handlers. They use the task tenant and do not write enterprise state."""
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any
 
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from opsmesh_api.knowledge.policy_index import PolicySearch, product_policy_index, retrieval_query
 from opsmesh_api.operations.policy import approval_for_total
 from opsmesh_api.services.finance import FinanceService
 from opsmesh_api.services.forecast import ForecastService
 from opsmesh_api.services.inventory import InventoryService
 from opsmesh_api.services.procurement import ProcurementService
 from opsmesh_api.services.supplier import SupplierService
-from opsmesh_api.tools.policy_rules import (
-    RULE_SUPPLIER_NOT_APPROVED,
-    approval_rule_ids,
-    search_rule_ids,
-)
+from opsmesh_api.tools.policy_rules import RULE_SUPPLIER_NOT_APPROVED, approval_rule_ids
 from opsmesh_api.tools.port import HandlerResult
 from opsmesh_api.tools.schemas import (
     ApprovalRequirementArgs,
@@ -214,20 +211,29 @@ def procurement_list(db: Session, tenant_id: str, args: BaseModel) -> HandlerRes
 
 
 def policy_search(db: Session, tenant_id: str, args: BaseModel) -> HandlerResult:
-    del db, tenant_id
+    """Return citations for the task tenant. This payload has no approval flag."""
+
+    del db
     parsed = _expect(args, PolicySearchArgs)
-    rule_ids = search_rule_ids(
-        extended_cost_cents=parsed.extended_cost_cents,
-        supplier_status=parsed.supplier_status,
-        quantity=parsed.quantity,
-        minimum_order_quantity=parsed.minimum_order_quantity,
-        case_pack=parsed.case_pack,
-        available_cents=parsed.available_cents,
+    query = parsed.query.strip() if isinstance(parsed.query, str) else ""
+    if not query:
+        query = retrieval_query(
+            extended_cost_cents=parsed.extended_cost_cents,
+            supplier_status=parsed.supplier_status,
+            reason=None,
+        )
+    citations = product_policy_index().search(
+        PolicySearch(
+            tenant_id=tenant_id,
+            query=query,
+            as_of=parsed.as_of or date.today(),
+            limit=parsed.max_passages,
+        )
     )
     return HandlerResult(
         source="policy",
         observed_at=_now(),
-        data={"rule_ids": rule_ids},
+        data={"citations": [item.as_dict() for item in citations]},
         result_reference="policy:search",
     )
 

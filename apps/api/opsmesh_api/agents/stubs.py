@@ -1,6 +1,6 @@
 """In-process specialists. They call the simulator or the policy service, never a model."""
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from threading import Lock
 from time import perf_counter
 from typing import Any
@@ -15,6 +15,16 @@ from opsmesh_api.agents.contracts import (
     AgentTask,
     AgentType,
 )
+from opsmesh_api.knowledge.policy_index import (
+    WARNING_CITATION_CONTRADICTS,
+    WARNING_CITATION_MISSING,
+    PolicyCitation,
+    PolicySearch,
+    PolicySearchPort,
+    denies_required_approval,
+    product_policy_index,
+    retrieval_query,
+)
 from opsmesh_api.operations.policy import approval_for_total
 from opsmesh_api.services.errors import NotFoundError, StockConflictError
 from opsmesh_api.services.finance import FinanceService
@@ -22,7 +32,7 @@ from opsmesh_api.services.forecast import ForecastService
 from opsmesh_api.services.inventory import InventoryService
 from opsmesh_api.services.supplier import SupplierService
 from opsmesh_api.workflows.models import Confidence
-from opsmesh_api.workflows.schemas import ResultEvidenceItem, WarningItem
+from opsmesh_api.workflows.schemas import EvidenceCitation, ResultEvidenceItem, WarningItem
 
 
 class _InventoryParams(BaseModel):
@@ -82,6 +92,7 @@ def _completed(
     task: AgentTask,
     facts: dict[str, Any],
     evidence: list[ResultEvidenceItem],
+    warnings: list[WarningItem] | None = None,
 ) -> AgentResultEnvelope:
     return AgentResultEnvelope(
         schema_version=SCHEMA_VERSION,
@@ -90,7 +101,7 @@ def _completed(
         status=AgentResultStatus.COMPLETED,
         evidence=evidence,
         facts=facts,
-        warnings=[],
+        warnings=warnings or [],
         confidence=Confidence.HIGH,
     )
 
@@ -109,37 +120,83 @@ def _evidence(
     )
 
 
+def _citation_evidence(citation: PolicyCitation, observed_at: datetime) -> ResultEvidenceItem:
+    return ResultEvidenceItem(
+        type="policy_citation",
+        source=AgentType.POLICY.value,
+        source_record_id=citation.document_id,
+        observed_at=observed_at,
+        citation=EvidenceCitation(
+            document_id=citation.document_id,
+            version=citation.version,
+            checksum=citation.checksum,
+            location=citation.location,
+            snippet=citation.snippet,
+        ),
+    )
+
+
 def _policy_explanation(
     *,
     reason: str | None,
+    quantity: int,
     requires_manager: bool,
     requires_finance: bool,
+    support: PolicyCitation | None,
+    missing_citation: bool,
 ) -> str:
     if reason == "supplier_not_approved":
-        return "The supplier is not approved, so the purchase is blocked."
-    if reason == "insufficient_budget":
-        return "The available budget cannot fund the minimum order."
-    if reason == "adequate_stock":
-        return "Available stock already covers the selected demand."
-    if reason == "missing_evidence":
-        return "A required simulator record is missing, so no purchase is proposed."
-    if requires_manager and requires_finance:
-        return "The purchase total requires manager and finance approval."
-    if requires_manager:
-        return "The purchase total requires manager approval."
-    if requires_finance:
-        return "The purchase total requires finance approval."
-    return "The purchase total does not require additional approval."
+        text = "The supplier is not approved, so the purchase is blocked."
+    elif reason == "insufficient_budget":
+        text = "The available budget cannot fund the minimum order."
+    elif reason == "adequate_stock":
+        text = "Available stock already covers the selected demand."
+    elif reason == "missing_evidence":
+        text = "A required simulator record is missing, so no purchase is proposed."
+    elif quantity > 0:
+        lead = f"The purchase quantity is {quantity}. "
+        if requires_manager and requires_finance:
+            text = lead + "The purchase total requires manager and finance approval."
+        elif requires_manager:
+            text = lead + "The purchase total requires manager approval."
+        elif requires_finance:
+            text = lead + "The purchase total requires finance approval."
+        else:
+            text = lead + "The purchase total does not require additional approval."
+    elif requires_manager and requires_finance:
+        text = "The purchase total requires manager and finance approval."
+    elif requires_manager:
+        text = "The purchase total requires manager approval."
+    elif requires_finance:
+        text = "The purchase total requires finance approval."
+    else:
+        text = "The purchase total does not require additional approval."
+    if support is not None:
+        started = support.effective_start.isoformat()
+        return (
+            f"{text} Cited from {support.document_id} version {support.version}, "
+            f"effective {started}."
+        )
+    if missing_citation:
+        return f"{text} The decision stands without a citation."
+    return text
 
 
 class StubAgentClient:
     """Local specialist client. A later transport can implement the same port."""
 
-    def __init__(self, db: Session, *, timeout_seconds: float | None = None) -> None:
+    def __init__(
+        self,
+        db: Session,
+        *,
+        timeout_seconds: float | None = None,
+        policy_search: PolicySearchPort | None = None,
+    ) -> None:
         self._inventory = InventoryService(db)
         self._forecast = ForecastService(db)
         self._supplier = SupplierService(db)
         self._finance = FinanceService(db)
+        self._policy_search = policy_search if policy_search is not None else product_policy_index()
         self._timeout_seconds = timeout_seconds
         self._lock = Lock()
         self.tool_calls = 0
@@ -304,11 +361,58 @@ class StubAgentClient:
         requires_finance = False
         if params.reason is None and params.quantity > 0:
             requires_manager, requires_finance = approval_for_total(params.extended_cost_cents)
-        explanation = _policy_explanation(
+        self.tool_calls += 1
+        query = retrieval_query(
+            extended_cost_cents=params.extended_cost_cents,
+            supplier_status=params.supplier_status,
             reason=params.reason,
             requires_manager=requires_manager,
             requires_finance=requires_finance,
         )
+        citations = self._policy_search.search(
+            PolicySearch(
+                tenant_id=task.tenant_id,
+                query=query or "purchasing approval",
+                as_of=date.today(),
+            )
+        )
+        supportive = [
+            item
+            for item in citations
+            if not (
+                (requires_manager or requires_finance) and denies_required_approval(item.snippet)
+            )
+        ]
+        contradictions = [item for item in citations if item not in supportive]
+        warnings: list[WarningItem] = []
+        if not citations:
+            warnings.append(
+                _warning(
+                    WARNING_CITATION_MISSING,
+                    "The decision stands without a citation.",
+                )
+            )
+        for item in contradictions:
+            warnings.append(
+                _warning(
+                    WARNING_CITATION_CONTRADICTS,
+                    f"Retrieved passage {item.document_id} at {item.location} "
+                    "contradicts the policy decision. The decision is unchanged.",
+                )
+            )
+        observed = datetime.now(UTC)
+        explanation = _policy_explanation(
+            reason=params.reason,
+            quantity=params.quantity,
+            requires_manager=requires_manager,
+            requires_finance=requires_finance,
+            support=supportive[0] if supportive else None,
+            missing_citation=not citations,
+        )
+        evidence = [
+            _evidence("policy_decision", AgentType.POLICY.value, params.sku, observed),
+            *[_citation_evidence(item, observed) for item in citations],
+        ]
         facts = {
             "reason": params.reason,
             "blocked": params.blocked,
@@ -322,15 +426,4 @@ class StubAgentClient:
             "requires_finance_approval": requires_finance,
             "explanation": explanation,
         }
-        return _completed(
-            task,
-            facts,
-            [
-                _evidence(
-                    "policy_decision",
-                    AgentType.POLICY.value,
-                    params.sku,
-                    datetime.now(UTC),
-                )
-            ],
-        )
+        return _completed(task, facts, evidence, warnings)

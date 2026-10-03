@@ -48,11 +48,22 @@ class WarningItem(APIModel):
     message: str = Field(min_length=1)
 
 
+class EvidenceCitation(APIModel):
+    """A policy passage attached to a result. It does not authorize a purchase."""
+
+    document_id: str = Field(min_length=1)
+    version: str = Field(min_length=1)
+    checksum: str = Field(min_length=1)
+    location: str = Field(min_length=1)
+    snippet: str = Field(min_length=1)
+
+
 class ResultEvidenceItem(APIModel):
     type: str = Field(min_length=1)
     source: str = Field(min_length=1)
     source_record_id: str = Field(min_length=1)
     observed_at: datetime
+    citation: EvidenceCitation | None = None
 
     @field_validator("observed_at")
     @classmethod

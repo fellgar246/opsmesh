@@ -79,9 +79,16 @@ class StoreJournal:
                 prompt_version=recorded.prompt_version,
             ),
         )
-        if recorded.decision_facts is None or recorded.task.agent == AgentType.POLICY:
+        if recorded.decision_facts is None:
             return
         for item in recorded.envelope.evidence:
+            if recorded.task.agent == AgentType.POLICY and item.citation is None:
+                continue
+            checksum = (
+                item.citation.checksum
+                if item.citation is not None
+                else canonical_json_hash(recorded.decision_facts)
+            )
             self._store.add_evidence(
                 self._tenant_id,
                 self._run_id,
@@ -91,7 +98,7 @@ class StoreJournal:
                     source=item.source,
                     source_record_id=item.source_record_id,
                     observed_at=item.observed_at,
-                    checksum=canonical_json_hash(recorded.decision_facts),
+                    checksum=checksum,
                 ),
             )
 

@@ -138,6 +138,7 @@ def test_decision_records_cover_the_baseline() -> None:
         "0009-supervisor-planner.md",
         "0010-fanout-coordinator.md",
         "0011-constraint-synthesis.md",
+        "0012-policy-retrieval.md",
     ]
     planning_markers = ("_ori" + "gen/", "spe" + "cs/")
     for name in records:

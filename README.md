@@ -12,6 +12,8 @@ The coordinator executes that graph. Tasks with no unfinished dependencies start
 
 When specialist numbers disagree, the reorder rules produce the feasible quantity. The proposal keeps those numbers as evidence and records which constraints changed the requested quantity. Approval roles come from the policy rules. An explanation is kept only when every stated quantity and approval requirement matches that result; otherwise it is replaced. A new proposal supersedes the previous draft, so a run has one active proposal. Budget plans still fund the higher stockout risk first.
 
+The policy agent explains that decision with citations from the versioned documents in `knowledge/policies`. Search keeps passages for the task tenant that are inside their effective dates, and it returns at most five. `policy.search` returns those citations. It does not set approval or block flags. If nothing is in scope, the decision stands and the result warns `policy_citation_missing`. A passage that denies a required approval is returned as a warning, and the flags stay with the policy rules.
+
 ## Requirements
 
 - Node.js 20 or newer

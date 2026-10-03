@@ -135,9 +135,7 @@ def _enterprise_state(db: Session) -> tuple[int, int, int, int, int, int]:
     assert stock is not None
     assert budget is not None
     orders = db.scalar(
-        select(func.count())
-        .select_from(PurchaseOrder)
-        .where(PurchaseOrder.tenant_id == NORTHWIND)
+        select(func.count()).select_from(PurchaseOrder).where(PurchaseOrder.tenant_id == NORTHWIND)
     )
     assert orders is not None
     return (
@@ -428,7 +426,7 @@ def test_retries_increment_and_do_not_duplicate_success(
         assert [row.retry_count for row in misses] == [0, 1]
 
 
-def test_policy_search_returns_rule_ids_without_citations(
+def test_policy_search_returns_citations_without_an_authorization_bit(
     session_factory: sessionmaker[Session],
 ) -> None:
     with session_factory() as db:
@@ -444,11 +442,17 @@ def test_policy_search_returns_rule_ids_without_citations(
             )
         )
         assert found.status == ToolStatus.SUCCEEDED
-        assert found.data == {"rule_ids": ["rule.purchase_above_5000_manager_approval"]}
-        empty = registry.invoke(
-            _call(run_id, task_id, AgentType.POLICY, "policy.search", {})
-        )
-        assert empty.data == {"rule_ids": []}
+        assert found.data is not None
+        assert set(found.data) == {"citations"}
+        citations = found.data["citations"]
+        assert isinstance(citations, list)
+        cited = next(item for item in citations if "5000" in str(item["snippet"]))
+        assert cited["document_id"] in {"procurement-policy", "budget-approval-policy"}
+        assert cited["version"]
+        assert cited["checksum"]
+        assert cited["location"]
+        empty = registry.invoke(_call(run_id, task_id, AgentType.POLICY, "policy.search", {}))
+        assert empty.data == {"citations": []}
         approval = registry.invoke(
             _call(
                 run_id,
@@ -474,11 +478,9 @@ def test_policy_search_returns_rule_ids_without_citations(
             "restricted": True,
             "rule_ids": ["rule.supplier_not_approved"],
         }
-        blob = json.dumps(
-            [found.model_dump(mode="json"), empty.model_dump(mode="json"), restricted.data]
-        )
+        restricted_blob = json.dumps(restricted.data)
         for token in ("citation", "excerpt", "document", "http"):
-            assert token not in blob
+            assert token not in restricted_blob
 
 
 def test_url_sql_and_shell_tools_cannot_be_registered(
