@@ -24,6 +24,12 @@ from opsmesh_api.agents.ceilings import MAX_TASK_RETRIES, TASK_TIMEOUT_SECONDS
 from opsmesh_api.agents.contracts import AgentType
 from opsmesh_api.agents.prompts import CONVERSION_ORDER
 from opsmesh_api.identity.access import distinct_agent_identity
+from opsmesh_api.policy.gate import denial_for, managed_decision, tool_request
+from opsmesh_api.policy.managed import (
+    ManagedPolicyAdapter,
+    ManagedPolicyTransport,
+    select_policy_port,
+)
 from opsmesh_api.settings import Settings
 from opsmesh_api.tools.catalog import READ_TOOL_SPECS, WRITE_TOOL_SPECS
 from opsmesh_api.tools.port import (
@@ -313,11 +319,13 @@ def select_tool_port(
     db: Session,
     settings: Settings,
     transport: GatewayTransport | None = None,
+    policy_transport: ManagedPolicyTransport | None = None,
 ) -> ToolPort:
     """Use the local registry unless the gateway flag is actually on."""
 
+    policy = _managed_policy(settings, policy_transport)
     if not settings.cloud_capability(settings.cloud_tool_gateway_enabled):
-        return LocalToolRegistry(db)
+        return LocalToolRegistry(db, policy=policy)
     config = specialist_gateway_config(settings)
     resolved = transport
     if resolved is None:
@@ -327,7 +335,25 @@ def select_tool_port(
             config,
             protocol_version=settings.tool_gateway_protocol_version.strip() or MCP_PROTOCOL_VERSION,
         )
-    return GatewayToolAdapter(db, config, resolved, database_url=settings.database_url)
+    return GatewayToolAdapter(
+        db,
+        config,
+        resolved,
+        database_url=settings.database_url,
+        policy=policy,
+    )
+
+
+def _managed_policy(
+    settings: Settings,
+    transport: ManagedPolicyTransport | None,
+) -> ManagedPolicyAdapter | None:
+    """Attach the managed adapter only when that flag is actually on."""
+
+    selected = select_policy_port(settings, transport)
+    if isinstance(selected, ManagedPolicyAdapter):
+        return selected
+    return None
 
 
 class GatewayToolAdapter:
@@ -344,12 +370,14 @@ class GatewayToolAdapter:
         transport: GatewayTransport,
         *,
         database_url: str = "",
+        policy: ManagedPolicyAdapter | None = None,
     ) -> None:
         self._db = db
         self._store = WorkflowStore(db)
         self._config = config
         self._transport = transport
         self._database_url = database_url
+        self._policy = policy
         self._definitions = {item.name: item for item in local_tool_definitions()}
         self._specs = {spec.name: spec for spec in READ_TOOL_SPECS}
         targets = transport.list_targets()
@@ -362,7 +390,7 @@ class GatewayToolAdapter:
 
     def invoke(self, call: ToolCall) -> ToolResult:
         if call.tool_name in WRITE_TOOL_NAMES:
-            return LocalToolRegistry(self._db).invoke(call)
+            return LocalToolRegistry(self._db, policy=self._policy).invoke(call)
         task = self._task(call)
         if task is None:
             raise ToolTaskNotFound(call.task_id)
@@ -401,6 +429,20 @@ class GatewayToolAdapter:
                 error_message=message,
                 error_field=field,
             )
+        local_denial = _local_denial(call, parsed, target)
+        if local_denial is None:
+            decision = managed_decision(self._policy, tool_request(call))
+            if decision is not None:
+                denied = denial_for(decision)
+                if denied is not None:
+                    code, message = denied
+                    return self._fail(
+                        call,
+                        started,
+                        arguments_hash,
+                        error_code=code,
+                        error_message=message,
+                    )
         request = build_gateway_request(call, self._config, database_url=self._database_url)
         retry_count = _next_retry(self._prior(call, arguments_hash))
         response, retry_count = self._call_with_retry(
@@ -459,9 +501,7 @@ class GatewayToolAdapter:
 
     def permitted_tools(self, agent: AgentType) -> tuple[str, ...]:
         names = {
-            target.name
-            for target in self._targets.values()
-            if agent in target.permitted_agents
+            target.name for target in self._targets.values() if agent in target.permitted_agents
         }
         if agent == AgentType.PROCUREMENT_EXECUTOR:
             names.update(spec.name for spec in WRITE_TOOL_SPECS)

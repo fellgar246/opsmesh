@@ -11,6 +11,8 @@ from sqlalchemy.orm import Session
 
 from opsmesh_api.agents.contracts import AgentType
 from opsmesh_api.identity.access import allow
+from opsmesh_api.policy.gate import denial_for, managed_decision, tool_request
+from opsmesh_api.policy.managed import ManagedPolicyAdapter
 from opsmesh_api.services.errors import NotFoundError, ProcurementWriteError, StockConflictError
 from opsmesh_api.tools.catalog import READ_TOOL_SPECS, WRITE_TOOL_SPECS, ToolSpec
 from opsmesh_api.tools.port import (
@@ -37,9 +39,16 @@ _EXECUTOR = frozenset({AgentType.PROCUREMENT_EXECUTOR})
 class LocalToolRegistry:
     """In-process registry. Specialists depend on `ToolPort`, not on this class."""
 
-    def __init__(self, db: Session, specs: Sequence[ToolSpec] | None = None) -> None:
+    def __init__(
+        self,
+        db: Session,
+        specs: Sequence[ToolSpec] | None = None,
+        *,
+        policy: ManagedPolicyAdapter | None = None,
+    ) -> None:
         self._db = db
         self._store = WorkflowStore(db)
+        self._policy = policy
         self._specs: dict[str, ToolSpec] = {}
         self.handler_calls = 0
         self._cache: dict[tuple[UUID, str, str], ToolResult] = {}
@@ -119,6 +128,16 @@ class LocalToolRegistry:
                 arguments_hash,
                 error_code="denied",
                 error_message="The tenant does not match the task.",
+            )
+        denied = _managed_denial(self._policy, call)
+        if denied is not None:
+            code, message = denied
+            return self._fail(
+                call,
+                started,
+                arguments_hash,
+                error_code=code,
+                error_message=message,
             )
         if spec.kind == _WRITE_KIND:
             arguments_hash = validated_arguments_hash(parsed)
@@ -352,6 +371,18 @@ class LocalToolRegistry:
         if row is None:
             raise ToolTaskNotFound(call.task_id)
         return row
+
+
+def _managed_denial(
+    policy: ManagedPolicyAdapter | None,
+    call: ToolCall,
+) -> tuple[str, str] | None:
+    """Deny when the managed vote denies. Local arguments stay as they were."""
+
+    decision = managed_decision(policy, tool_request(call))
+    if decision is None:
+        return None
+    return denial_for(decision)
 
 
 def _can_register(spec: ToolSpec) -> bool:

@@ -23,6 +23,9 @@ from opsmesh_api.agents.runtime import (
     selected_remote_agents,
 )
 from opsmesh_api.agents.stubs import StubAgentClient
+from opsmesh_api.policy.gate import PolicyGatedAgentClient
+from opsmesh_api.policy.managed import ManagedPolicyTransport, select_policy_port
+from opsmesh_api.policy.port import LocalPolicyPort
 from opsmesh_api.settings import Settings
 from opsmesh_api.tools.gateway import GatewayTransport, select_tool_port
 
@@ -106,25 +109,42 @@ def select_agent_client(
     runtime: AgentRuntimeTransport | None = None,
     local: AgentClient | None = None,
     gateway: GatewayTransport | None = None,
+    policy_transport: ManagedPolicyTransport | None = None,
 ) -> AgentClient:
     """Use stubs unless a cloud flag is actually on."""
 
     resolved = local if local is not None else _local_client(db, settings, model, gateway)
-    if not settings.cloud_capability(settings.cloud_agent_runtime_enabled):
-        return resolved
-    selected = selected_remote_agents(settings.remote_runtime_agents, CONVERSION_ORDER)
-    if not selected:
-        return resolved
-    transport = runtime if runtime is not None else AgentCoreRuntimeClient(
-        region=settings.bedrock_region,
-    )
-    remote = RemoteAgentClient(
-        remote_endpoints(selected, settings.agent_runtime_endpoints),
-        transport,
-        agent_identities(settings.agent_runtime_identities, CONVERSION_ORDER),
-        qualifier=settings.agent_runtime_qualifier,
-    )
-    return RoutedAgentClient(resolved, remote, frozenset(selected))
+    if settings.cloud_capability(settings.cloud_agent_runtime_enabled):
+        selected = selected_remote_agents(settings.remote_runtime_agents, CONVERSION_ORDER)
+        if selected:
+            transport = (
+                runtime
+                if runtime is not None
+                else AgentCoreRuntimeClient(
+                    region=settings.bedrock_region,
+                )
+            )
+            remote = RemoteAgentClient(
+                remote_endpoints(selected, settings.agent_runtime_endpoints),
+                transport,
+                agent_identities(settings.agent_runtime_identities, CONVERSION_ORDER),
+                qualifier=settings.agent_runtime_qualifier,
+            )
+            resolved = RoutedAgentClient(resolved, remote, frozenset(selected))
+    return _with_policy(resolved, settings, policy_transport)
+
+
+def _with_policy(
+    client: AgentClient,
+    settings: Settings,
+    transport: ManagedPolicyTransport | None,
+) -> AgentClient:
+    """Leave the client unchanged unless the managed policy flag is actually on."""
+
+    policy = select_policy_port(settings, transport)
+    if isinstance(policy, LocalPolicyPort):
+        return client
+    return PolicyGatedAgentClient(client, policy)
 
 
 def _local_client(

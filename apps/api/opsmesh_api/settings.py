@@ -44,6 +44,8 @@ class Settings(BaseSettings):
     # agent=identity pairs. Empty uses opsmesh/<agent> for each specialist.
     tool_gateway_identities: str = ""
     tool_gateway_protocol_version: str = "2026-07-28"
+    cloud_policy_enabled: bool = False
+    policy_engine_id: str = ""
     cloud_event_bus_enabled: bool = False
     event_bus_name: str = ""
     event_queue_url: str = ""
