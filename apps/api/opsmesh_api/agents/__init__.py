@@ -1,4 +1,4 @@
-"""Typed specialist contracts and the in-process stub client."""
+"""Typed specialist contracts, local stubs, and the model-backed adapter."""
 
 from opsmesh_api.agents.contracts import (
     SCHEMA_VERSION,
@@ -9,6 +9,7 @@ from opsmesh_api.agents.contracts import (
     AgentType,
     WorkflowContext,
 )
+from opsmesh_api.agents.model_adapter import ModelAgentAdapter
 from opsmesh_api.agents.stubs import StubAgentClient
 
 __all__ = [
@@ -18,6 +19,7 @@ __all__ = [
     "AgentResultStatus",
     "AgentTask",
     "AgentType",
+    "ModelAgentAdapter",
     "StubAgentClient",
     "WorkflowContext",
 ]

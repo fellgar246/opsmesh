@@ -32,6 +32,8 @@ class SpecialistRun:
     envelope: AgentResultEnvelope
     status: TaskStatus
     decision_facts: dict[str, Any] | None
+    model_id: str | None = None
+    prompt_version: str | None = None
 
 
 @dataclass
@@ -43,6 +45,7 @@ class ReorderCoordination:
     finance: bool
     runs: list[SpecialistRun] = field(default_factory=list)
     tool_calls: int = 0
+    model_calls: int = 0
     context: WorkflowContext | None = None
 
 
@@ -155,6 +158,7 @@ class ReorderCoordinator:
             finance=finance_approval,
             runs=runs,
             tool_calls=_tool_calls(self._client),
+            model_calls=_model_calls(self._client),
             context=context,
         )
 
@@ -176,24 +180,32 @@ class ReorderCoordinator:
             payload = self._client.execute(task)
             accepted: AcceptedResult = accept_result(task, payload)
         except ContractRejection as error:
+            model_id, prompt_version = _provenance(self._client, task.task_id)
             return SpecialistRun(
                 task=task,
                 envelope=_rejection_envelope(task, error),
                 status=TaskStatus.FAILED,
                 decision_facts=None,
+                model_id=model_id,
+                prompt_version=prompt_version,
             )
+        model_id, prompt_version = _provenance(self._client, task.task_id)
         if not accepted.accepted:
             return SpecialistRun(
                 task=task,
                 envelope=accepted.envelope,
                 status=TaskStatus.FAILED,
                 decision_facts=None,
+                model_id=model_id,
+                prompt_version=prompt_version,
             )
         return SpecialistRun(
             task=task,
             envelope=accepted.envelope,
             status=TaskStatus.COMPLETED,
             decision_facts=accepted.facts,
+            model_id=model_id,
+            prompt_version=prompt_version,
         )
 
     def _failed(
@@ -210,6 +222,7 @@ class ReorderCoordinator:
             finance=False,
             runs=runs,
             tool_calls=_tool_calls(self._client),
+            model_calls=_model_calls(self._client),
             context=context,
         )
 
@@ -219,6 +232,28 @@ def _tool_calls(client: AgentClient) -> int:
     if isinstance(recorded, int):
         return recorded
     return 0
+
+
+def _model_calls(client: AgentClient) -> int:
+    recorded = getattr(client, "model_calls", None)
+    if isinstance(recorded, int):
+        return recorded
+    return 0
+
+
+def _provenance(client: AgentClient, task_id: UUID) -> tuple[str | None, str | None]:
+    lookup = getattr(client, "provenance_for", None)
+    if not callable(lookup):
+        return None, None
+    found = lookup(task_id)
+    if not isinstance(found, tuple) or len(found) != 2:
+        return None, None
+    model_id, prompt_version = found
+    if not isinstance(model_id, str) or not model_id:
+        model_id = None
+    if not isinstance(prompt_version, str) or not prompt_version:
+        prompt_version = None
+    return model_id, prompt_version
 
 
 def _accept_into_context(context: WorkflowContext, recorded: SpecialistRun) -> None:

@@ -119,7 +119,7 @@ class OperationalEngine:
             requires_manager_approval=outcome.manager,
             requires_finance_approval=outcome.finance,
             proposal_arguments=arguments,
-            cost_summary=_cost(outcome.tool_calls, latency_ms),
+            cost_summary=_cost(outcome.tool_calls, latency_ms, outcome.model_calls),
         )
 
     def _persist_reorder(
@@ -152,7 +152,7 @@ class OperationalEngine:
                 },
                 started_at=started,
                 finished_at=finished,
-                cost_summary=_cost(outcome.tool_calls, latency_ms),
+                cost_summary=_cost(outcome.tool_calls, latency_ms, outcome.model_calls),
             ),
         )
         for recorded in outcome.runs:
@@ -187,8 +187,8 @@ class OperationalEngine:
                     evidence=recorded.envelope.evidence,
                     warnings=recorded.envelope.warnings,
                     confidence=recorded.envelope.confidence,
-                    model_id=None,
-                    prompt_version=None,
+                    model_id=recorded.model_id,
+                    prompt_version=recorded.prompt_version,
                 ),
             )
             if recorded.decision_facts is None or recorded.task.agent.value == "policy":
@@ -822,9 +822,9 @@ def _computed(
     )
 
 
-def _cost(tool_calls: int, latency_ms: int) -> CostSummary:
+def _cost(tool_calls: int, latency_ms: int, model_calls: int = 0) -> CostSummary:
     return CostSummary(
-        model_calls=0,
+        model_calls=model_calls,
         tool_calls=tool_calls,
         latency_ms=latency_ms,
         estimated_cost_cents=0,

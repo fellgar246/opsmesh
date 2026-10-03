@@ -27,6 +27,10 @@ class Settings(BaseSettings):
     cloud_integrations_enabled: bool = False
     agent_runtime_enabled: bool = False
     model_provider_enabled: bool = False
+    # Blank selects every specialist, in conversion order, when the provider is on.
+    model_backed_agents: str = ""
+    bedrock_model_id: str = "anthropic.claude-3-haiku-20240307-v1:0"
+    bedrock_region: str = "us-east-1"
     agentic_features_enabled: bool = False
     multi_agent_execution_enabled: bool = False
     cloud_agent_runtime_enabled: bool = False

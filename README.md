@@ -2,6 +2,10 @@
 
 Operations control plane for bounded, local-first workflows. The default execution profile is local deterministic simulation. Cloud agent, model, and runtime integrations stay off unless a feature flag enables them.
 
+Model-backed specialists run only when `AWS_AGENTIC_FEATURES_ENABLED` and `MODEL_PROVIDER_ENABLED` are both true. Otherwise the reorder workflow uses the local stubs, and the golden proposal stays the same. The live model provider is Amazon Bedrock. Local tests do not call it.
+
+Simulator reads are named tools on a local registry. Each tool has an argument schema and an allowlist of agent types. A specialist cannot call another domain's tool, and the supervisor cannot call simulator tools. Denied and invalid calls are audited. The registry is the port a later remote gateway can implement.
+
 ## Requirements
 
 - Node.js 20 or newer
