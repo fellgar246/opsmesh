@@ -135,6 +135,7 @@ def test_decision_records_cover_the_baseline() -> None:
         "0006-fan-out-ceilings.md",
         "0007-model-specialist-port.md",
         "0008-local-tool-registry.md",
+        "0009-supervisor-planner.md",
     ]
     planning_markers = ("_ori" + "gen/", "spe" + "cs/")
     for name in records:

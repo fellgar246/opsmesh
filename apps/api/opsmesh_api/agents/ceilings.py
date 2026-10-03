@@ -1,9 +1,14 @@
-"""Application quotas for one model call.
+"""Application quotas for one workflow and one model call.
 
-These ceilings are hard limits. The adapter must not send a larger budget,
-and output past the ceiling is rejected instead of stored.
+These ceilings are hard limits. Exceeding one fails the workflow with an
+explicit limit error. The adapter must not send a larger token budget, and
+output past the token ceiling is rejected instead of stored.
 """
 
+MAX_AGENTS = 6
+MAX_TASKS = 12
+MAX_DELEGATIONS = 10
+MAX_SUPERVISOR_ITERATIONS = 4
 OUTPUT_TOKEN_CEILING = 900
 INPUT_TOKEN_CEILING = 6000
 

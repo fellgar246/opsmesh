@@ -3,6 +3,25 @@ export type CostSummary = {
   tool_calls: number;
   latency_ms: number;
   estimated_cost_cents: number | null;
+  supervisor_iterations?: number;
+};
+
+export type PlanTask = {
+  id: string;
+  agent: string;
+  input: Record<string, unknown>;
+  read_only: boolean;
+};
+
+export type PlanDependency = {
+  task_id: string;
+  depends_on: string;
+};
+
+export type SupervisorPlan = {
+  tasks: PlanTask[];
+  dependencies: PlanDependency[];
+  reason: string;
 };
 
 export type EvidenceItem = {
@@ -96,6 +115,7 @@ export type WorkflowRun = {
   started_at: string;
   finished_at: string | null;
   cost_summary: CostSummary;
+  plan?: SupervisorPlan | null;
   tasks: AgentTask[];
   evidence: Evidence[];
   proposals: Proposal[];

@@ -13,6 +13,7 @@ export const workflowCeilings = {
   modelCalls: 20,
   toolCalls: 30,
   durationSeconds: 180,
+  supervisorIterations: 4,
 } as const;
 
 export const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";

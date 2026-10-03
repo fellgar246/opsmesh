@@ -32,8 +32,7 @@ _SHARED_RULE = (
 
 SYSTEM_PROMPTS: dict[AgentType, str] = {
     AgentType.POLICY: (
-        "You are the policy specialist. Explain the deterministic policy decision. "
-        + _SHARED_RULE
+        "You are the policy specialist. Explain the deterministic policy decision. " + _SHARED_RULE
     ),
     AgentType.INVENTORY: (
         "You are the inventory specialist. Explain the inventory snapshot. " + _SHARED_RULE

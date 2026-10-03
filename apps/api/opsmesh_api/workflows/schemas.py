@@ -6,6 +6,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from opsmesh_api.agents.plan_schema import SupervisorPlan
 from opsmesh_api.workflows.models import (
     ApprovalRole,
     ApprovalStatus,
@@ -39,6 +40,7 @@ class CostSummary(APIModel):
     tool_calls: int = Field(default=0, ge=0)
     latency_ms: int = Field(default=0, ge=0)
     estimated_cost_cents: int | None = Field(default=None, ge=0)
+    supervisor_iterations: int = Field(default=0, ge=0)
 
 
 class WarningItem(APIModel):
@@ -67,6 +69,7 @@ class WorkflowRunCreate(APIModel):
     started_at: datetime
     finished_at: datetime | None = None
     cost_summary: CostSummary = Field(default_factory=CostSummary)
+    plan: SupervisorPlan | None = None
 
     @field_validator("input")
     @classmethod
@@ -281,6 +284,7 @@ class WorkflowRunRead(APIModel):
     started_at: datetime
     finished_at: datetime | None
     cost_summary: CostSummary
+    plan: SupervisorPlan | None = None
     tasks: list[AgentTaskRead]
     evidence: list[EvidenceRead]
     proposals: list[ProposalRead]

@@ -32,6 +32,14 @@ function goldenRun(): WorkflowRun {
     started_at: "2026-09-23T18:00:00Z",
     finished_at: "2026-09-23T18:00:01Z",
     cost_summary: { model_calls: 0, tool_calls: 6, latency_ms: 40, estimated_cost_cents: 0 },
+    plan: {
+      reason: "Check inventory, demand, and supplier facts, then finance, then policy.",
+      tasks: [
+        { id: "inventory", agent: "inventory", input: { sku: "ABC-42" }, read_only: true },
+        { id: "finance", agent: "finance", input: {}, read_only: true },
+      ],
+      dependencies: [{ task_id: "finance", depends_on: "inventory" }],
+    },
     tasks: ["inventory", "demand", "supplier", "finance", "policy"].map((agent, index) => ({
       id: `22222222-2222-4222-8222-22222222222${index}`,
       workflow_run_id: runId,
@@ -173,6 +181,10 @@ describe("operations console", () => {
     expect(screen.getAllByTestId("status-badge")[0]).toHaveTextContent("Waiting approval");
     expect(screen.getByText("Available units")).toBeInTheDocument();
     expect(screen.getByText("128 units")).toBeInTheDocument();
+    expect(screen.getByTestId("supervisor-plan-reason")).toHaveTextContent(
+      "Check inventory, demand, and supplier facts, then finance, then policy.",
+    );
+    expect(screen.getByTestId("supervisor-plan")).toHaveTextContent("depends on inventory");
   });
 
   it("shows an empty state when the tenant has no workflows", async () => {

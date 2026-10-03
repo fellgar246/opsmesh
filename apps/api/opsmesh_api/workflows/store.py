@@ -5,6 +5,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from opsmesh_api.agents.plan_schema import SupervisorPlan, validate_plan
 from opsmesh_api.services.models import Tenant
 from opsmesh_api.workflows.errors import PersistenceRejected, WorkflowNotFound
 from opsmesh_api.workflows.hashing import canonical_json_hash
@@ -45,6 +46,9 @@ class WorkflowStore:
 
     def create_run(self, tenant_id: str, body: WorkflowRunCreate) -> WorkflowRunRead:
         self._require_tenant(tenant_id)
+        stored_plan = None
+        if body.plan is not None:
+            stored_plan = validate_plan(body.plan.model_dump(mode="json")).model_dump(mode="json")
         row = WorkflowRun(
             id=body.id,
             tenant_id=tenant_id,
@@ -55,6 +59,7 @@ class WorkflowStore:
             started_at=body.started_at,
             finished_at=body.finished_at,
             cost_summary=body.cost_summary.model_dump(mode="json"),
+            plan=stored_plan,
         )
         self._insert(row)
         return self.get_run(tenant_id, body.id)
@@ -310,6 +315,7 @@ class WorkflowStore:
             started_at=run.started_at,
             finished_at=run.finished_at,
             cost_summary=run.cost_summary,  # type: ignore[arg-type]
+            plan=None if run.plan is None else SupervisorPlan.model_validate(run.plan),
             tasks=[
                 self._task_read(
                     task,

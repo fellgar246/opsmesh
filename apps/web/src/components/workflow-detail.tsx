@@ -21,9 +21,9 @@ import {
   truncateMiddle,
 } from "@/lib/format";
 import { workflowCeilings } from "@/lib/identity";
-import { workflowStatusLabels, workflowTypeLabels } from "@/lib/labels";
+import { agentLabels, workflowStatusLabels, workflowTypeLabels } from "@/lib/labels";
 import { useSession } from "@/lib/session";
-import { terminalStatuses, type WorkflowRun } from "@/lib/types";
+import { terminalStatuses, type SupervisorPlan, type WorkflowRun } from "@/lib/types";
 
 const tabs = ["overview", "graph", "evidence", "trace", "cost"] as const;
 
@@ -117,6 +117,7 @@ function WorkflowBody({
           <Infeasibility reason={reason} />
         </div>
       ) : null}
+      {run.plan ? <PlanPanel plan={run.plan} /> : null}
       <div className="mt-4">
         {proposal ? <ProposalSummary proposal={proposal} /> : reason && run.status !== "FAILED" ? (
           <Infeasibility reason={reason} />
@@ -156,6 +157,37 @@ function WorkflowBody({
         ) : null}
       </section>
     </article>
+  );
+}
+
+function PlanPanel({ plan }: { plan: SupervisorPlan }) {
+  const dependencies = new Map<string, string[]>();
+  for (const task of plan.tasks) dependencies.set(task.id, []);
+  for (const edge of plan.dependencies) {
+    const current = dependencies.get(edge.task_id) ?? [];
+    current.push(edge.depends_on);
+    dependencies.set(edge.task_id, current);
+  }
+  return (
+    <section aria-label="Supervisor plan" className="mt-4 rounded-lg border border-line bg-surface p-4" data-testid="supervisor-plan">
+      <h2 className="text-sm font-semibold">Supervisor plan</h2>
+      <p className="mt-1 text-[13px]" data-testid="supervisor-plan-reason">
+        {plan.reason}
+      </p>
+      <ul className="mt-3 space-y-1 text-[13px]">
+        {plan.tasks.map((task) => {
+          const deps = dependencies.get(task.id) ?? [];
+          const waiting = deps.length === 0 ? "no dependencies" : `depends on ${deps.join(", ")}`;
+          return (
+            <li key={task.id}>
+              <span className="font-medium">{agentLabels[task.agent] ?? task.agent}</span>
+              <span className="text-muted"> · {waiting}</span>
+              {task.read_only ? <span className="text-muted"> · read-only</span> : null}
+            </li>
+          );
+        })}
+      </ul>
+    </section>
   );
 }
 
@@ -252,6 +284,11 @@ function CostPanel({ run }: { run: WorkflowRun }) {
     <div className="space-y-3">
       <Meter label="Tasks" value={run.tasks.length} ceiling={workflowCeilings.tasks} />
       <Meter label="Model calls" value={summary.model_calls} ceiling={workflowCeilings.modelCalls} />
+      <Meter
+        label="Supervisor iterations"
+        value={summary.supervisor_iterations ?? 0}
+        ceiling={workflowCeilings.supervisorIterations}
+      />
       <Meter label="Tool calls" value={summary.tool_calls} ceiling={workflowCeilings.toolCalls} />
       <Meter
         label="Duration"

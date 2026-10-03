@@ -6,6 +6,8 @@ Model-backed specialists run only when `AWS_AGENTIC_FEATURES_ENABLED` and `MODEL
 
 Simulator reads are named tools on a local registry. Each tool has an argument schema and an allowlist of agent types. A specialist cannot call another domain's tool, and the supervisor cannot call simulator tools. Denied and invalid calls are audited. The registry is the port a later remote gateway can implement.
 
+The supervisor turns a request into a validated task graph and stores that plan on the workflow. It selects allowlisted specialists and does not query simulator data. Local runs use a deterministic planner. A model planner is used only when the model provider flag is on, and its output passes the same validator. More than four supervisor iterations fails the run.
+
 ## Requirements
 
 - Node.js 20 or newer

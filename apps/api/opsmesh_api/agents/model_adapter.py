@@ -214,9 +214,7 @@ def _ground_facts(
     return facts
 
 
-def _user_prompt(
-    task: AgentTask, grounded: AgentResultEnvelope, permitted: tuple[str, ...]
-) -> str:
+def _user_prompt(task: AgentTask, grounded: AgentResultEnvelope, permitted: tuple[str, ...]) -> str:
     payload = {
         "task_id": str(task.task_id),
         "agent": task.agent.value,

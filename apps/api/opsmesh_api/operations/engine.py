@@ -8,7 +8,15 @@ from uuid import UUID, uuid4
 from sqlalchemy.orm import Session
 
 from opsmesh_api.agents.contracts import AgentClient
-from opsmesh_api.agents.coordinator import ReorderCoordination, ReorderCoordinator
+from opsmesh_api.agents.coordinator import ReorderCoordination, ReorderCoordinator, SpecialistRun
+from opsmesh_api.agents.plan_schema import PlanValidationError, SupervisorPlan, parent_agents
+from opsmesh_api.agents.planner import (
+    DeterministicPlanner,
+    PlanningRequest,
+    SupervisorPlanner,
+    WorkflowKind,
+)
+from opsmesh_api.agents.planner import PlanCandidate as PlannerCandidate
 from opsmesh_api.agents.stubs import StubAgentClient
 from opsmesh_api.operations.policy import REASON_MISSING_EVIDENCE, approval_for_total
 from opsmesh_api.operations.quantity import select_demand, solve_reorder
@@ -59,7 +67,12 @@ _APPROVAL_TTL = timedelta(days=7)
 class OperationalEngine:
     """Gather simulator facts, apply policy, and persist one workflow run."""
 
-    def __init__(self, db: Session, agent_client: AgentClient | None = None) -> None:
+    def __init__(
+        self,
+        db: Session,
+        agent_client: AgentClient | None = None,
+        planner: SupervisorPlanner | None = None,
+    ) -> None:
         self._db = db
         self._inventory = InventoryService(db)
         self._forecast = ForecastService(db)
@@ -67,12 +80,43 @@ class OperationalEngine:
         self._finance = FinanceService(db)
         self._store = WorkflowStore(db)
         self._agent_client = agent_client
+        self._planner = planner if planner is not None else DeterministicPlanner()
 
     def reorder(self, tenant_id: str, body: ReorderRequest) -> ReorderRead:
         self._require_tenant(tenant_id)
         started = datetime.now(UTC)
         timer = perf_counter()
         run_id = uuid4()
+        try:
+            plan = self._planner.plan(
+                PlanningRequest(
+                    workflow_type=WorkflowKind.REORDER,
+                    sku=body.sku,
+                    region=body.region,
+                    horizon_days=FORECAST_HORIZON_DAYS,
+                )
+            )
+        except PlanValidationError as error:
+            self._persist_rejected_plan(
+                tenant_id=tenant_id,
+                run_id=run_id,
+                workflow_type="reorder",
+                requested_by=body.requested_by,
+                workflow_input={
+                    "sku": body.sku,
+                    "region": body.region,
+                    "service_level": body.service_level,
+                },
+                started=started,
+                latency_ms=_latency(timer),
+            )
+            return ReorderRead(
+                run_id=run_id,
+                workflow_type="reorder",
+                status=WorkflowStatus.FAILED,
+                reason=error.code,
+                cost_summary=_planner_cost(self._planner, _latency(timer)),
+            )
         client = self._agent_client or StubAgentClient(self._db)
         outcome = ReorderCoordinator(client).run(
             workflow_id=run_id,
@@ -103,6 +147,7 @@ class OperationalEngine:
             latency_ms=latency_ms,
             proposal_arguments=arguments,
             risk_level=risk,
+            plan=plan,
         )
         math = outcome.math
         return ReorderRead(
@@ -119,7 +164,12 @@ class OperationalEngine:
             requires_manager_approval=outcome.manager,
             requires_finance_approval=outcome.finance,
             proposal_arguments=arguments,
-            cost_summary=_cost(outcome.tool_calls, latency_ms, outcome.model_calls),
+            cost_summary=_cost(
+                outcome.tool_calls,
+                latency_ms,
+                outcome.model_calls + self._planner.model_calls,
+                self._planner.iterations,
+            ),
         )
 
     def _persist_reorder(
@@ -133,6 +183,7 @@ class OperationalEngine:
         latency_ms: int,
         proposal_arguments: dict[str, Any] | None,
         risk_level: RiskLevel,
+        plan: SupervisorPlan,
     ) -> None:
         from opsmesh_api.workflows.hashing import canonical_json_hash
         from opsmesh_api.workflows.schemas import WorkflowRunCreate
@@ -152,10 +203,22 @@ class OperationalEngine:
                 },
                 started_at=started,
                 finished_at=finished,
-                cost_summary=_cost(outcome.tool_calls, latency_ms, outcome.model_calls),
+                cost_summary=_cost(
+                    outcome.tool_calls,
+                    latency_ms,
+                    outcome.model_calls + self._planner.model_calls,
+                    self._planner.iterations,
+                ),
+                plan=plan,
             ),
         )
-        for recorded in outcome.runs:
+        ids = {recorded.task.agent.value: recorded.task.task_id for recorded in outcome.runs}
+        for recorded in _ordered_runs(outcome.runs, plan):
+            depends_on = [
+                ids[parent]
+                for parent in parent_agents(plan, recorded.task.agent.value)
+                if parent in ids
+            ]
             task_input = {
                 "agent": recorded.task.agent.value,
                 "tenant_id": recorded.task.tenant_id,
@@ -170,6 +233,7 @@ class OperationalEngine:
                 AgentTaskCreate(
                     id=recorded.task.task_id,
                     agent_type=recorded.task.agent.value,
+                    depends_on=depends_on,
                     status=recorded.status,
                     input=task_input,
                     started_at=started,
@@ -259,6 +323,38 @@ class OperationalEngine:
         self._require_tenant(tenant_id)
         started = datetime.now(UTC)
         timer = perf_counter()
+        try:
+            plan = self._planner.plan(
+                PlanningRequest(
+                    workflow_type=WorkflowKind.SUPPLIER_DELAY,
+                    supplier_id=body.supplier_id,
+                    horizon_days=FORECAST_HORIZON_DAYS,
+                )
+            )
+        except PlanValidationError:
+            run_id = uuid4()
+            self._persist_rejected_plan(
+                tenant_id=tenant_id,
+                run_id=run_id,
+                workflow_type="supplier_delay",
+                requested_by=body.requested_by,
+                workflow_input={"supplier_id": body.supplier_id},
+                started=started,
+                latency_ms=_latency(timer),
+            )
+            return SupplierDelayRead(
+                run_id=run_id,
+                workflow_type="supplier_delay",
+                status=WorkflowStatus.FAILED,
+                supplier_id=body.supplier_id,
+                delay_id="",
+                delay_days=0,
+                affected_orders=[],
+                affected_skus=[],
+                stockout_risk=[],
+                mitigations=[],
+                cost_summary=_planner_cost(self._planner, _latency(timer)),
+            )
         calls = 1
         delay = self._supplier.get_delay(tenant_id, body.supplier_id)
         calls += 1
@@ -285,7 +381,7 @@ class OperationalEngine:
             snapshots = self._inventory.list_snapshots_for_sku(tenant_id, order.sku)
             if not snapshots:
                 return self._failed_delay(
-                    tenant_id, body, delay.delay_id, started, timer, calls, facts
+                    tenant_id, body, delay.delay_id, started, timer, calls, facts, plan
                 )
             for snapshot in snapshots:
                 facts.append(
@@ -303,7 +399,7 @@ class OperationalEngine:
                     )
                 except NotFoundError:
                     return self._failed_delay(
-                        tenant_id, body, delay.delay_id, started, timer, calls, facts
+                        tenant_id, body, delay.delay_id, started, timer, calls, facts, plan
                     )
                 facts.append(
                     _from_model(
@@ -358,6 +454,7 @@ class OperationalEngine:
             risk_level=_worst(assessments),
             requires_manager=False,
             requires_finance=False,
+            plan=plan,
         )
         return SupplierDelayRead(
             run_id=run_id,
@@ -371,13 +468,44 @@ class OperationalEngine:
             stockout_risk=assessments,
             mitigations=mitigations,
             proposal_arguments=arguments,
-            cost_summary=_cost(calls, _latency(timer)),
+            cost_summary=_planner_cost(self._planner, _latency(timer), calls),
         )
 
     def budget_plan(self, tenant_id: str, body: BudgetPlanRequest) -> BudgetPlanRead:
         self._require_tenant(tenant_id)
         started = datetime.now(UTC)
         timer = perf_counter()
+        try:
+            plan = self._planner.plan(
+                PlanningRequest(
+                    workflow_type=WorkflowKind.BUDGET_PLAN,
+                    horizon_days=FORECAST_HORIZON_DAYS,
+                    candidates=[
+                        PlannerCandidate(sku=item.sku, region=item.region)
+                        for item in body.candidates
+                    ],
+                )
+            )
+        except PlanValidationError:
+            run_id = uuid4()
+            self._persist_rejected_plan(
+                tenant_id=tenant_id,
+                run_id=run_id,
+                workflow_type="budget_plan",
+                requested_by=body.requested_by,
+                workflow_input={
+                    "candidates": [item.model_dump(mode="json") for item in body.candidates]
+                },
+                started=started,
+                latency_ms=_latency(timer),
+            )
+            return BudgetPlanRead(
+                run_id=run_id,
+                workflow_type="budget_plan",
+                status=WorkflowStatus.FAILED,
+                lines=[],
+                cost_summary=_planner_cost(self._planner, _latency(timer)),
+            )
         calls = 1
         budget = self._finance.get_budget(tenant_id)
         facts: list[_Fact] = [_from_model("finance", "budget", tenant_id, budget)]
@@ -449,7 +577,7 @@ class OperationalEngine:
                     )
                 )
         except NotFoundError:
-            return self._failed_plan(tenant_id, body, started, timer, calls, facts)
+            return self._failed_plan(tenant_id, body, started, timer, calls, facts, plan)
 
         prepared.sort(key=lambda item: (-item[0], item[1].sku, item[1].region))
         remaining = budget.available_cents
@@ -515,6 +643,7 @@ class OperationalEngine:
             risk_level=_worst_score(lines),
             requires_manager=any_manager,
             requires_finance=any_finance,
+            plan=plan,
         )
         return BudgetPlanRead(
             run_id=run_id,
@@ -522,7 +651,7 @@ class OperationalEngine:
             status=status,
             lines=lines,
             proposal_arguments=arguments,
-            cost_summary=_cost(calls, _latency(timer)),
+            cost_summary=_planner_cost(self._planner, _latency(timer), calls),
         )
 
     def _failed_delay(
@@ -534,6 +663,7 @@ class OperationalEngine:
         timer: float,
         calls: int,
         facts: list["_Fact"],
+        plan: SupervisorPlan,
     ) -> SupplierDelayRead:
         facts.append(
             _computed(
@@ -559,6 +689,7 @@ class OperationalEngine:
             risk_level=RiskLevel.HIGH,
             requires_manager=False,
             requires_finance=False,
+            plan=plan,
         )
         return SupplierDelayRead(
             run_id=run_id,
@@ -571,7 +702,7 @@ class OperationalEngine:
             affected_skus=[],
             stockout_risk=[],
             mitigations=[],
-            cost_summary=_cost(calls, _latency(timer)),
+            cost_summary=_planner_cost(self._planner, _latency(timer), calls),
         )
 
     def _failed_plan(
@@ -582,6 +713,7 @@ class OperationalEngine:
         timer: float,
         calls: int,
         facts: list["_Fact"],
+        plan: SupervisorPlan,
     ) -> BudgetPlanRead:
         facts.append(
             _computed(
@@ -609,13 +741,43 @@ class OperationalEngine:
             risk_level=RiskLevel.HIGH,
             requires_manager=False,
             requires_finance=False,
+            plan=plan,
         )
         return BudgetPlanRead(
             run_id=run_id,
             workflow_type="budget_plan",
             status=WorkflowStatus.FAILED,
             lines=[],
-            cost_summary=_cost(calls, _latency(timer)),
+            cost_summary=_planner_cost(self._planner, _latency(timer), calls),
+        )
+
+    def _persist_rejected_plan(
+        self,
+        *,
+        tenant_id: str,
+        run_id: UUID,
+        workflow_type: str,
+        requested_by: str,
+        workflow_input: dict[str, Any],
+        started: datetime,
+        latency_ms: int,
+    ) -> None:
+        """Store a failed run with no tasks when the plan never validates."""
+
+        from opsmesh_api.workflows.schemas import WorkflowRunCreate
+
+        self._store.create_run(
+            tenant_id,
+            WorkflowRunCreate(
+                id=run_id,
+                workflow_type=workflow_type,
+                requested_by=requested_by,
+                status=WorkflowStatus.FAILED,
+                input=workflow_input,
+                started_at=started,
+                finished_at=datetime.now(UTC),
+                cost_summary=_planner_cost(self._planner, latency_ms),
+            ),
         )
 
     def _require_tenant(self, tenant_id: str) -> None:
@@ -639,12 +801,13 @@ class OperationalEngine:
         risk_level: RiskLevel,
         requires_manager: bool,
         requires_finance: bool,
+        plan: SupervisorPlan | None = None,
     ) -> UUID:
         from opsmesh_api.workflows.schemas import WorkflowRunCreate
 
         run_id = uuid4()
         finished = datetime.now(UTC)
-        summary = _cost(tool_calls, latency_ms)
+        summary = _planner_cost(self._planner, latency_ms, tool_calls)
         self._store.create_run(
             tenant_id,
             WorkflowRunCreate(
@@ -656,19 +819,28 @@ class OperationalEngine:
                 started_at=started,
                 finished_at=finished,
                 cost_summary=summary,
+                plan=plan,
             ),
         )
         grouped: dict[str, list[_Fact]] = {}
         for fact in facts:
             grouped.setdefault(fact.agent_type, []).append(fact)
-        for agent_type, group in grouped.items():
-            task_id = uuid4()
+        agent_ids = {agent_type: uuid4() for agent_type in grouped}
+        for agent_type in _ordered_names(list(grouped), plan):
+            group = grouped[agent_type]
+            task_id = agent_ids[agent_type]
+            depends_on = [
+                agent_ids[parent]
+                for parent in (parent_agents(plan, agent_type) if plan is not None else [])
+                if parent in agent_ids
+            ]
             self._store.add_task(
                 tenant_id,
                 run_id,
                 AgentTaskCreate(
                     id=task_id,
                     agent_type=agent_type,
+                    depends_on=depends_on,
                     status=TaskStatus.COMPLETED,
                     input=workflow_input,
                     started_at=started,
@@ -728,9 +900,7 @@ class OperationalEngine:
                     id=proposal_id,
                     proposal_type=proposal_type,
                     arguments=proposal_arguments,
-                    estimated_impact={
-                            "extended_cost_cents": _impact_cents(proposal_arguments)
-                        },
+                    estimated_impact={"extended_cost_cents": _impact_cents(proposal_arguments)},
                     risk_level=risk_level,
                     status=proposal_status,
                     created_at=finished,
@@ -822,13 +992,54 @@ def _computed(
     )
 
 
-def _cost(tool_calls: int, latency_ms: int, model_calls: int = 0) -> CostSummary:
+def _cost(
+    tool_calls: int,
+    latency_ms: int,
+    model_calls: int = 0,
+    supervisor_iterations: int = 0,
+) -> CostSummary:
     return CostSummary(
         model_calls=model_calls,
         tool_calls=tool_calls,
         latency_ms=latency_ms,
         estimated_cost_cents=0,
+        supervisor_iterations=supervisor_iterations,
     )
+
+
+def _planner_cost(
+    planner: SupervisorPlanner,
+    latency_ms: int,
+    tool_calls: int = 0,
+) -> CostSummary:
+    return _cost(tool_calls, latency_ms, planner.model_calls, planner.iterations)
+
+
+def _ordered_names(names: list[str], plan: SupervisorPlan | None) -> list[str]:
+    """Insert parents before the tasks that name them."""
+
+    if plan is None:
+        return list(names)
+    present = set(names)
+    parents = {
+        name: [parent for parent in parent_agents(plan, name) if parent in present]
+        for name in names
+    }
+    ordered: list[str] = []
+    remaining = list(dict.fromkeys(names))
+    while remaining:
+        ready = [name for name in remaining if all(parent in ordered for parent in parents[name])]
+        if not ready:
+            return list(dict.fromkeys(names))
+        ordered.extend(ready)
+        remaining = [name for name in remaining if name not in ordered]
+    return ordered
+
+
+def _ordered_runs(runs: list[SpecialistRun], plan: SupervisorPlan) -> list[SpecialistRun]:
+    order = _ordered_names([run.task.agent.value for run in runs], plan)
+    rank = {name: index for index, name in enumerate(order)}
+    return sorted(runs, key=lambda run: rank.get(run.task.agent.value, len(rank)))
 
 
 def _latency(timer: float) -> int:

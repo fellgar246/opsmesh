@@ -170,10 +170,7 @@ class StubAgentClient:
                 "invalid_input",
                 "The specialist task parameters are invalid.",
             )
-        if (
-            self._timeout_seconds is not None
-            and perf_counter() - started > self._timeout_seconds
-        ):
+        if self._timeout_seconds is not None and perf_counter() - started > self._timeout_seconds:
             return _failed(
                 task,
                 "timeout",

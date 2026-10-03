@@ -16,6 +16,4 @@ router = APIRouter(prefix="/tenants", tags=["tenants"])
 @router.get("", response_model=TenantList)
 def list_tenants(db: Annotated[Session, Depends(get_db)]) -> TenantList:
     rows = db.scalars(select(Tenant).order_by(Tenant.name)).all()
-    return TenantList(
-        tenants=[TenantRead(tenant_id=row.tenant_id, name=row.name) for row in rows]
-    )
+    return TenantList(tenants=[TenantRead(tenant_id=row.tenant_id, name=row.name) for row in rows])

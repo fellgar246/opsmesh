@@ -107,6 +107,7 @@ class WorkflowRun(Base):
     started_at: Mapped[datetime] = mapped_column(UtcDateTime)
     finished_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
     cost_summary: Mapped[dict[str, Any]] = mapped_column(_json_document())
+    plan: Mapped[dict[str, Any] | None] = mapped_column(_json_document(), nullable=True)
 
 
 class AgentTask(Base):

@@ -5,7 +5,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
-from opsmesh_api.agents.routing import select_agent_client
+from opsmesh_api.agents.routing import select_agent_client, select_planner
 from opsmesh_api.db import get_db
 from opsmesh_api.operations.engine import OperationalEngine
 from opsmesh_api.operations.schemas import (
@@ -26,7 +26,11 @@ def _engine(
     db: Annotated[Session, Depends(get_db)],
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> OperationalEngine:
-    return OperationalEngine(db, agent_client=select_agent_client(db, settings))
+    return OperationalEngine(
+        db,
+        agent_client=select_agent_client(db, settings),
+        planner=select_planner(settings),
+    )
 
 
 @router.post("/reorder", response_model=ReorderRead)

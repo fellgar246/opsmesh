@@ -37,7 +37,21 @@ test("golden reorder shows quantity and manager approval", async ({ page }) => {
         input: { sku: "ABC-42", region: "mx-central", service_level: 0.9 },
         started_at: "2026-09-23T18:00:00Z",
         finished_at: "2026-09-23T18:00:01Z",
-        cost_summary: { model_calls: 0, tool_calls: 6, latency_ms: 40, estimated_cost_cents: 0 },
+        cost_summary: {
+          model_calls: 0,
+          tool_calls: 6,
+          latency_ms: 40,
+          estimated_cost_cents: 0,
+          supervisor_iterations: 1,
+        },
+        plan: {
+          reason: "Check inventory, demand, and supplier facts, then finance, then policy.",
+          tasks: [
+            { id: "inventory", agent: "inventory", input: { sku: "ABC-42" }, read_only: true },
+            { id: "finance", agent: "finance", input: {}, read_only: true },
+          ],
+          dependencies: [{ task_id: "finance", depends_on: "inventory" }],
+        },
         tasks: [],
         evidence: [],
         proposals: [
@@ -73,6 +87,9 @@ test("golden reorder shows quantity and manager approval", async ({ page }) => {
   await page.getByLabel("Service level").fill("0.90");
   await page.getByRole("button", { name: "Run workflow" }).click();
   await expect(page.getByTestId("proposal-quantity")).toHaveText("250 units");
+  await expect(page.getByTestId("supervisor-plan-reason")).toHaveText(
+    "Check inventory, demand, and supplier facts, then finance, then policy.",
+  );
   await expect(page.getByTestId("approval-role")).toContainText("Manager approval required");
   await expect(page.getByTestId("status-badge").first()).toContainText("Waiting approval");
 });
