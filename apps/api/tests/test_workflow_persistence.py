@@ -250,6 +250,47 @@ def test_two_proposals_are_distinguished_by_status(
     assert pending.approvals[0].required_role == "procurement_manager"
 
 
+def test_a_new_proposal_supersedes_the_previous_draft(
+    session_factory: sessionmaker[Session],
+) -> None:
+    run = _run()
+    created = datetime(2026, 9, 23, 18, 5, tzinfo=UTC)
+    with session_factory() as session:
+        store = WorkflowStore(session)
+        store.create_run(NORTHWIND, run)
+        first = store.add_proposal(
+            NORTHWIND,
+            run.id,
+            ProposalCreate(
+                id=uuid4(),
+                proposal_type="reorder",
+                arguments={"quantity": 200},
+                estimated_impact={"extended_cost_cents": 740000},
+                risk_level="medium",
+                status="DRAFT",
+                created_at=created,
+            ),
+        )
+        second = store.add_proposal(
+            NORTHWIND,
+            run.id,
+            ProposalCreate(
+                id=uuid4(),
+                proposal_type="reorder",
+                arguments={"quantity": 250},
+                estimated_impact={"extended_cost_cents": 925000},
+                risk_level="low",
+                status="DRAFT",
+                created_at=created,
+            ),
+        )
+        loaded = store.get_run(NORTHWIND, run.id)
+    by_id = {item.id: item.status for item in loaded.proposals}
+    assert by_id[first.id] == "SUPERSEDED"
+    assert by_id[second.id] == "DRAFT"
+    assert sum(status != "SUPERSEDED" for status in by_id.values()) == 1
+
+
 def test_self_dependent_task_is_rejected_before_insert(
     session_factory: sessionmaker[Session],
 ) -> None:

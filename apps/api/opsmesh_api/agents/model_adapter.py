@@ -30,36 +30,11 @@ from opsmesh_api.agents.model_port import (
 )
 from opsmesh_api.agents.prompts import PROMPT_VERSIONS, SYSTEM_PROMPTS
 from opsmesh_api.agents.stubs import StubAgentClient
+from opsmesh_api.operations.synthesis import narrative_contradicts, stated_purchase_quantities
 from opsmesh_api.tools.port import ToolPort
 from opsmesh_api.tools.registry import LocalToolRegistry
 from opsmesh_api.workflows.models import Confidence
 from opsmesh_api.workflows.schemas import WarningItem
-
-# Phrases that deny an approval the deterministic decision still requires.
-_DENIAL_PHRASES = (
-    "unnecessary",
-    "not required",
-    "does not require",
-    "isn't required",
-    "is not required",
-    "no approval required",
-    "approval is not needed",
-    "not need approval",
-)
-
-
-def narrative_contradicts(
-    explanation: str, *, requires_manager: bool, requires_finance: bool
-) -> bool:
-    """Return whether prose denies or invents an approval the policy facts require."""
-
-    text = explanation.casefold()
-    denies = any(phrase in text for phrase in _DENIAL_PHRASES)
-    if requires_manager or requires_finance:
-        return denies
-    claims_manager = "manager approval" in text and not denies
-    claims_finance = "finance approval" in text and not denies
-    return claims_manager or claims_finance
 
 
 class ModelAgentAdapter:
@@ -209,6 +184,11 @@ def _ground_facts(
         return facts
     proposed = model_facts.get("explanation")
     if not isinstance(proposed, str) or not proposed.strip():
+        return facts
+    quantity = facts.get("quantity")
+    if isinstance(quantity, int) and any(
+        item != quantity for item in stated_purchase_quantities(proposed)
+    ):
         return facts
     if narrative_contradicts(
         proposed,

@@ -33,6 +33,7 @@ from opsmesh_api.agents.coordinator import (
     ReorderCoordination,
     SpecialistRun,
     _accept_into_context,
+    _accept_policy_explanation,
     _model_calls,
     _proposal_arguments,
     _provenance,
@@ -42,8 +43,14 @@ from opsmesh_api.agents.coordinator import (
 from opsmesh_api.agents.plan_schema import SupervisorPlan
 from opsmesh_api.agents.transitions import UNSATISFIED, IllegalTransition, assert_transition
 from opsmesh_api.operations.policy import REASON_MISSING_EVIDENCE
-from opsmesh_api.operations.quantity import ReorderMath, solve_reorder
+from opsmesh_api.operations.quantity import ReorderMath
 from opsmesh_api.operations.schemas import ReorderRequest
+from opsmesh_api.operations.synthesis import (
+    ConstraintOutcome,
+    accept_explanation,
+    render_explanation,
+    synthesize_from_facts,
+)
 from opsmesh_api.workflows.models import Confidence, TaskStatus, WorkflowStatus
 from opsmesh_api.workflows.schemas import WarningItem
 
@@ -210,6 +217,8 @@ class PlanCoordinator:
         self._workflow_status = WorkflowStatus.RUNNING
         self._reason: str | None = None
         self._math: ReorderMath | None = None
+        self._outcome: ConstraintOutcome | None = None
+        self._explanation: str | None = None
         self._manager = False
         self._finance = False
         self._runs: dict[UUID, SpecialistRun] = {}
@@ -388,21 +397,21 @@ class PlanCoordinator:
         )
         if any(name not in facts for name in required):
             return None
-        inventory = facts[AgentType.INVENTORY.value]
-        demand = facts[AgentType.DEMAND.value]
-        supplier = facts[AgentType.SUPPLIER.value]
-        finance = facts[AgentType.FINANCE.value]
-        return solve_reorder(
+        outcome = synthesize_from_facts(
             service_level=self._request.service_level,
-            p50=int(demand["p50"]),
-            p90=int(demand["p90"]),
-            available_units=int(inventory["available_units"]),
-            case_pack=int(supplier["case_pack"]),
-            minimum_order_quantity=int(supplier["minimum_order_quantity"]),
-            unit_cost_cents=int(supplier["unit_cost_cents"]),
-            supplier_status=str(supplier["status"]),
-            available_cents=int(finance["available_cents"]),
+            inventory=facts[AgentType.INVENTORY.value],
+            demand=facts[AgentType.DEMAND.value],
+            supplier=facts[AgentType.SUPPLIER.value],
+            finance=facts[AgentType.FINANCE.value],
+            evidence_refs=[
+                (item.source, item.source_record_id) for item in self._context.evidence_refs
+            ],
         )
+        self._outcome = outcome
+        if outcome.math is None:
+            self._explanation = render_explanation(outcome)
+            return None
+        return outcome.math
 
     def _call(self, task: object) -> AgentResultEnvelope:
         from opsmesh_api.agents.contracts import AgentTask
@@ -460,6 +469,8 @@ class PlanCoordinator:
             self._failed_envelopes[item.task_id] = payload
             self._fail_attempt(item.task_id, "specialist_failed", payload)
             return
+        if recorded.task.agent == AgentType.POLICY and self._outcome is not None:
+            self._explanation = _accept_policy_explanation(recorded, self._outcome)
         self._journal.commit_success(recorded)
         self._settled.add(item.task_id)
         self._transition(item.task_id, TaskStatus.COMPLETED, "completed")
@@ -564,7 +575,27 @@ class PlanCoordinator:
         request = self._request
         assert request is not None
         supplier = self._context.facts[AgentType.SUPPLIER.value]
-        arguments = _proposal_arguments(request, supplier, math, self._manager, self._finance)
+        outcome = self._outcome
+        if outcome is None:
+            self._finish(WorkflowStatus.FAILED, REASON_MISSING_EVIDENCE)
+            return
+        explanation = self._explanation
+        if explanation is None:
+            proposed = policy.get("explanation")
+            explanation = accept_explanation(
+                proposed if isinstance(proposed, str) else None,
+                outcome,
+            )
+            self._explanation = explanation
+        arguments = _proposal_arguments(
+            request,
+            supplier,
+            math,
+            self._manager,
+            self._finance,
+            outcome,
+            explanation,
+        )
         if arguments is not None:
             self._context.proposals.append(arguments)
         self._finish(status, math.reason)
@@ -687,6 +718,7 @@ class PlanCoordinator:
             tool_calls=self._tool_calls,
             model_calls=self._model_calls,
             context=self._context,
+            explanation=self._explanation,
         )
 
 

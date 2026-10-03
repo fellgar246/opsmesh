@@ -84,6 +84,7 @@ class ReorderRead(APIModel):
     requires_manager_approval: bool = False
     requires_finance_approval: bool = False
     proposal_arguments: dict[str, Any] | None = None
+    explanation: str | None = None
     cost_summary: CostSummary
 
 

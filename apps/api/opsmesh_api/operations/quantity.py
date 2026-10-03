@@ -8,6 +8,10 @@ from opsmesh_api.operations.policy import (
 from opsmesh_api.services.models import SupplierStatus
 
 P90_SERVICE_LEVEL = 0.90
+CONSTRAINT_CASE_PACK = "case_pack"
+CONSTRAINT_MINIMUM_ORDER = "minimum_order"
+CONSTRAINT_BUDGET = "budget"
+CONSTRAINT_SUPPLIER_STATUS = "supplier_status"
 
 
 def case_pack_size(case_pack: int | None) -> int:
@@ -43,8 +47,8 @@ def rounded_need(
     selected_demand: int,
     case_pack: int | None,
     minimum_order_quantity: int,
-) -> tuple[int, int]:
-    """Return gross need and the packed order quantity.
+) -> tuple[int, int, tuple[str, ...]]:
+    """Return gross need, the packed order quantity, and constraints that changed it.
 
     Non-positive need yields quantity 0. A positive need is rounded up to the
     case pack. If that quantity is still below the minimum order, it is raised
@@ -53,11 +57,18 @@ def rounded_need(
 
     gross_need = selected_demand - available_units
     if gross_need <= 0:
-        return gross_need, 0
+        return gross_need, 0, ()
+    binding: list[str] = []
     quantity = round_up_to_pack(gross_need, case_pack)
+    if quantity != gross_need:
+        binding.append(CONSTRAINT_CASE_PACK)
     if quantity < minimum_order_quantity:
-        quantity = round_up_to_pack(minimum_order_quantity, case_pack)
-    return gross_need, quantity
+        raised = round_up_to_pack(minimum_order_quantity, case_pack)
+        binding.append(CONSTRAINT_MINIMUM_ORDER)
+        if raised != minimum_order_quantity and CONSTRAINT_CASE_PACK not in binding:
+            binding.append(CONSTRAINT_CASE_PACK)
+        quantity = raised
+    return gross_need, quantity, tuple(binding)
 
 
 def affordable_units(
@@ -89,6 +100,8 @@ class ReorderMath:
         extended_cost_cents: int,
         reason: str | None,
         blocked: bool,
+        requested_quantity: int,
+        binding_constraints: tuple[str, ...],
     ) -> None:
         self.selected_quantile = selected_quantile
         self.selected_demand = selected_demand
@@ -98,6 +111,8 @@ class ReorderMath:
         self.extended_cost_cents = extended_cost_cents
         self.reason = reason
         self.blocked = blocked
+        self.requested_quantity = requested_quantity
+        self.binding_constraints = binding_constraints
 
     @property
     def feasible(self) -> bool:
@@ -119,65 +134,127 @@ def solve_reorder(
     """Apply the reorder rule sequence and stop at the first blocking rule."""
 
     quantile, selected = select_demand(service_level, p50, p90)
-    gross_need, quantity = rounded_need(
+    gross_need, quantity, packed_binding = rounded_need(
         available_units, selected, case_pack, minimum_order_quantity
     )
+    binding = list(packed_binding)
+    requested_quantity = quantity
     if supplier_status != SupplierStatus.APPROVED.value:
-        return ReorderMath(
-            selected_quantile=quantile,
-            selected_demand=selected,
+        binding.append(CONSTRAINT_SUPPLIER_STATUS)
+        return _math(
+            quantile=quantile,
+            selected=selected,
             gross_need=gross_need,
             quantity=0,
             unit_cost_cents=unit_cost_cents,
             extended_cost_cents=0,
             reason=REASON_SUPPLIER_NOT_APPROVED,
             blocked=True,
+            requested_quantity=requested_quantity,
+            binding=tuple(binding),
         )
     if quantity == 0:
-        return ReorderMath(
-            selected_quantile=quantile,
-            selected_demand=selected,
+        return _math(
+            quantile=quantile,
+            selected=selected,
             gross_need=gross_need,
             quantity=0,
             unit_cost_cents=unit_cost_cents,
             extended_cost_cents=0,
             reason=REASON_ADEQUATE_STOCK,
             blocked=False,
+            requested_quantity=requested_quantity,
+            binding=tuple(binding),
         )
     cap = affordable_units(available_cents, unit_cost_cents, case_pack)
     pack = case_pack_size(case_pack)
     if cap is None:
         cap = quantity
     if cap < minimum_order_quantity:
-        return ReorderMath(
-            selected_quantile=quantile,
-            selected_demand=selected,
+        _note_budget(binding, available_cents, unit_cost_cents, case_pack)
+        return _math(
+            quantile=quantile,
+            selected=selected,
             gross_need=gross_need,
             quantity=0,
             unit_cost_cents=unit_cost_cents,
             extended_cost_cents=0,
             reason=REASON_INSUFFICIENT_BUDGET,
             blocked=False,
+            requested_quantity=requested_quantity,
+            binding=tuple(binding),
         )
     feasible = min(quantity, cap)
+    if feasible < quantity:
+        _note_budget(binding, available_cents, unit_cost_cents, case_pack)
     if feasible < minimum_order_quantity or feasible % pack != 0:
-        return ReorderMath(
-            selected_quantile=quantile,
-            selected_demand=selected,
+        if CONSTRAINT_BUDGET not in binding:
+            _note_budget(binding, available_cents, unit_cost_cents, case_pack)
+        return _math(
+            quantile=quantile,
+            selected=selected,
             gross_need=gross_need,
             quantity=0,
             unit_cost_cents=unit_cost_cents,
             extended_cost_cents=0,
             reason=REASON_INSUFFICIENT_BUDGET,
             blocked=False,
+            requested_quantity=requested_quantity,
+            binding=tuple(binding),
         )
-    return ReorderMath(
-        selected_quantile=quantile,
-        selected_demand=selected,
+    return _math(
+        quantile=quantile,
+        selected=selected,
         gross_need=gross_need,
         quantity=feasible,
         unit_cost_cents=unit_cost_cents,
         extended_cost_cents=feasible * unit_cost_cents,
         reason=None,
         blocked=False,
+        requested_quantity=requested_quantity,
+        binding=tuple(binding),
+    )
+
+
+def _note_budget(
+    binding: list[str],
+    available_cents: int,
+    unit_cost_cents: int,
+    case_pack: int | None,
+) -> None:
+    """Record a budget cap, and case pack when the cap itself was rounded down."""
+
+    if CONSTRAINT_BUDGET not in binding:
+        binding.append(CONSTRAINT_BUDGET)
+    if unit_cost_cents <= 0 or CONSTRAINT_CASE_PACK in binding:
+        return
+    raw = available_cents // unit_cost_cents
+    if round_down_to_pack(raw, case_pack) != raw:
+        binding.append(CONSTRAINT_CASE_PACK)
+
+
+def _math(
+    *,
+    quantile: str,
+    selected: int,
+    gross_need: int,
+    quantity: int,
+    unit_cost_cents: int,
+    extended_cost_cents: int,
+    reason: str | None,
+    blocked: bool,
+    requested_quantity: int,
+    binding: tuple[str, ...],
+) -> ReorderMath:
+    return ReorderMath(
+        selected_quantile=quantile,
+        selected_demand=selected,
+        gross_need=gross_need,
+        quantity=quantity,
+        unit_cost_cents=unit_cost_cents,
+        extended_cost_cents=extended_cost_cents,
+        reason=reason,
+        blocked=blocked,
+        requested_quantity=requested_quantity,
+        binding_constraints=binding,
     )

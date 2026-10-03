@@ -19,6 +19,7 @@ from opsmesh_api.workflows.models import (
     Approval,
     Evidence,
     OperationalProposal,
+    ProposalStatus,
     TaskStatus,
     TaskTransition,
     ToolExecution,
@@ -171,6 +172,16 @@ class WorkflowStore:
         body: ProposalCreate,
     ) -> ProposalRead:
         self._require_run(tenant_id, run_id)
+        if body.status != ProposalStatus.SUPERSEDED:
+            priors = self._db.scalars(
+                select(OperationalProposal).where(
+                    OperationalProposal.tenant_id == tenant_id,
+                    OperationalProposal.workflow_run_id == run_id,
+                    OperationalProposal.status != ProposalStatus.SUPERSEDED.value,
+                )
+            ).all()
+            for prior in priors:
+                prior.status = ProposalStatus.SUPERSEDED.value
         row = OperationalProposal(
             id=body.id,
             tenant_id=tenant_id,

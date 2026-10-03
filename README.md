@@ -10,6 +10,8 @@ The supervisor turns a request into a validated task graph and stores that plan 
 
 The coordinator executes that graph. Tasks with no unfinished dependencies start together, and a task starts only after every dependency has completed. A failed specialist leaves sibling results in place, skips dependents, and does not build a purchase from invented supplier data. Each task times out, retries at most twice, and the workflow itself stops at 180 seconds. Model-call and tool-call ceilings are checked before the next task starts.
 
+When specialist numbers disagree, the reorder rules produce the feasible quantity. The proposal keeps those numbers as evidence and records which constraints changed the requested quantity. Approval roles come from the policy rules. An explanation is kept only when every stated quantity and approval requirement matches that result; otherwise it is replaced. A new proposal supersedes the previous draft, so a run has one active proposal. Budget plans still fund the higher stockout risk first.
+
 ## Requirements
 
 - Node.js 20 or newer

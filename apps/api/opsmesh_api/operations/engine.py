@@ -25,7 +25,7 @@ from opsmesh_api.agents.planner import (
 from opsmesh_api.agents.planner import PlanCandidate as PlannerCandidate
 from opsmesh_api.agents.stubs import StubAgentClient
 from opsmesh_api.operations.policy import REASON_MISSING_EVIDENCE, approval_for_total
-from opsmesh_api.operations.quantity import select_demand, solve_reorder
+from opsmesh_api.operations.quantity import select_demand
 from opsmesh_api.operations.risk import classify_stockout_risk, stockout_risk_score
 from opsmesh_api.operations.schemas import (
     FORECAST_HORIZON_DAYS,
@@ -39,6 +39,7 @@ from opsmesh_api.operations.schemas import (
     SupplierDelayRead,
     SupplierDelayRequest,
 )
+from opsmesh_api.operations.synthesis import synthesize
 from opsmesh_api.services.errors import NotFoundError
 from opsmesh_api.services.finance import FinanceService
 from opsmesh_api.services.forecast import ForecastService
@@ -171,6 +172,7 @@ class OperationalEngine:
             requires_manager_approval=outcome.manager,
             requires_finance_approval=outcome.finance,
             proposal_arguments=arguments,
+            explanation=outcome.explanation,
             cost_summary=_cost(
                 outcome.tool_calls,
                 latency_ms,
@@ -565,23 +567,48 @@ class OperationalEngine:
         except NotFoundError:
             return self._failed_plan(tenant_id, body, started, timer, calls, facts, plan)
 
+        # Stockout risk rank allocates the shared budget. Synthesis only sizes the next line.
         prepared.sort(key=lambda item: (-item[0], item[1].sku, item[1].region))
         remaining = budget.available_cents
         lines: list[PlanLine] = []
         any_manager = False
         any_finance = False
         for score, line, raw in prepared:
-            math = solve_reorder(
+            supplier_ref = f"{line.supplier_id}:{line.sku}"
+            forecast_ref = f"{line.sku}:{line.region}:{FORECAST_HORIZON_DAYS}"
+            outcome = synthesize(
                 service_level=raw["service_level"],
                 p50=raw["p50"],
                 p90=raw["p90"],
                 available_units=raw["available_units"],
                 case_pack=raw["case_pack"],
+                case_pack_supplied=True,
                 minimum_order_quantity=raw["minimum_order_quantity"],
                 unit_cost_cents=raw["unit_cost_cents"],
                 supplier_status=raw["supplier_status"],
                 available_cents=remaining,
+                evidence={
+                    "available_units": f"{line.sku}:{line.region}",
+                    "selected_forecast": forecast_ref,
+                    "minimum_order_quantity": supplier_ref,
+                    "case_pack": supplier_ref,
+                    "unit_cost_cents": supplier_ref,
+                    "available_budget_cents": tenant_id,
+                    "supplier_status": supplier_ref,
+                },
             )
+            math = outcome.math
+            if math is None:
+                lines.append(
+                    line.model_copy(
+                        update={
+                            "funded": False,
+                            "reason": outcome.reason,
+                            "quantity": 0,
+                        }
+                    )
+                )
+                continue
             manager = False
             finance = False
             funded = math.feasible and math.quantity > 0

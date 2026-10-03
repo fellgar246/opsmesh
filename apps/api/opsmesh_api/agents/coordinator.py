@@ -20,8 +20,14 @@ from opsmesh_api.agents.contracts import (
     specialist_task,
 )
 from opsmesh_api.operations.policy import REASON_ADEQUATE_STOCK, REASON_MISSING_EVIDENCE
-from opsmesh_api.operations.quantity import ReorderMath, solve_reorder
+from opsmesh_api.operations.quantity import ReorderMath
 from opsmesh_api.operations.schemas import FORECAST_HORIZON_DAYS, ReorderRequest
+from opsmesh_api.operations.synthesis import (
+    ConstraintOutcome,
+    accept_explanation,
+    render_explanation,
+    synthesize_from_facts,
+)
 from opsmesh_api.workflows.models import Confidence, TaskStatus, WorkflowStatus
 from opsmesh_api.workflows.schemas import WarningItem
 
@@ -47,6 +53,7 @@ class ReorderCoordination:
     tool_calls: int = 0
     model_calls: int = 0
     context: WorkflowContext | None = None
+    explanation: str | None = None
 
 
 def _rejection_envelope(task: AgentTask, error: ContractRejection) -> AgentResultEnvelope:
@@ -111,17 +118,19 @@ class ReorderCoordinator:
         demand = context.facts[AgentType.DEMAND.value]
         supplier = context.facts[AgentType.SUPPLIER.value]
         finance = context.facts[AgentType.FINANCE.value]
-        math = solve_reorder(
+        outcome = synthesize_from_facts(
             service_level=request.service_level,
-            p50=demand["p50"],
-            p90=demand["p90"],
-            available_units=inventory["available_units"],
-            case_pack=supplier["case_pack"],
-            minimum_order_quantity=supplier["minimum_order_quantity"],
-            unit_cost_cents=supplier["unit_cost_cents"],
-            supplier_status=supplier["status"],
-            available_cents=finance["available_cents"],
+            inventory=inventory,
+            demand=demand,
+            supplier=supplier,
+            finance=finance,
+            evidence_refs=[(item.source, item.source_record_id) for item in context.evidence_refs],
         )
+        math = outcome.math
+        if math is None:
+            failed = self._failed(context, runs, outcome.reason or REASON_MISSING_EVIDENCE)
+            failed.explanation = render_explanation(outcome)
+            return failed
         policy = self._invoke(
             AgentType.POLICY,
             tenant_id,
@@ -142,12 +151,22 @@ class ReorderCoordinator:
         runs.append(policy)
         if policy.decision_facts is None:
             return self._failed(context, runs, REASON_MISSING_EVIDENCE)
+        explanation = _accept_policy_explanation(policy, outcome)
         _accept_into_context(context, policy)
+        assert policy.decision_facts is not None
         manager, finance_approval = approvals_from_policy(policy.decision_facts)
         status = WorkflowStatus.COMPLETED
         if manager or finance_approval:
             status = WorkflowStatus.WAITING_APPROVAL
-        arguments = _proposal_arguments(request, supplier, math, manager, finance_approval)
+        arguments = _proposal_arguments(
+            request,
+            supplier,
+            math,
+            manager,
+            finance_approval,
+            outcome,
+            explanation,
+        )
         if arguments is not None:
             context.proposals.append(arguments)
         return ReorderCoordination(
@@ -160,6 +179,7 @@ class ReorderCoordinator:
             tool_calls=_tool_calls(self._client),
             model_calls=_model_calls(self._client),
             context=context,
+            explanation=explanation,
         )
 
     def _invoke(
@@ -272,12 +292,25 @@ def _accept_into_context(context: WorkflowContext, recorded: SpecialistRun) -> N
         )
 
 
+def _accept_policy_explanation(policy: SpecialistRun, outcome: ConstraintOutcome) -> str:
+    """Store the explanation that matches the outcome. A contradiction is replaced."""
+
+    facts = policy.decision_facts or {}
+    proposed = facts.get("explanation")
+    accepted = accept_explanation(proposed if isinstance(proposed, str) else None, outcome)
+    facts["explanation"] = accepted
+    policy.decision_facts = facts
+    return accepted
+
+
 def _proposal_arguments(
     request: ReorderRequest,
     supplier: dict[str, Any],
     math: ReorderMath,
     manager: bool,
     finance: bool,
+    outcome: ConstraintOutcome,
+    explanation: str,
 ) -> dict[str, Any] | None:
     if math.reason is not None and math.reason != REASON_ADEQUATE_STOCK:
         return None
@@ -297,4 +330,8 @@ def _proposal_arguments(
         "requires_manager_approval": manager,
         "requires_finance_approval": finance,
         "reason": math.reason,
+        "requested_quantity": math.requested_quantity,
+        "binding_constraints": list(math.binding_constraints),
+        "recommendations": [item.as_dict() for item in outcome.recommendations],
+        "explanation": explanation,
     }

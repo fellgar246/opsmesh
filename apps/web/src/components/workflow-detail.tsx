@@ -23,7 +23,7 @@ import {
 import { workflowCeilings } from "@/lib/identity";
 import { agentLabels, workflowStatusLabels, workflowTypeLabels } from "@/lib/labels";
 import { useSession } from "@/lib/session";
-import { terminalStatuses, type SupervisorPlan, type WorkflowRun } from "@/lib/types";
+import { terminalStatuses, type Proposal, type SupervisorPlan, type WorkflowRun } from "@/lib/types";
 
 const tabs = ["overview", "graph", "evidence", "trace", "cost"] as const;
 
@@ -86,8 +86,9 @@ function WorkflowBody({
   refreshing: boolean;
 }) {
   const status = workflowStatusLabels[run.status] ?? { label: run.status, tone: "neutral" };
-  const proposal = run.proposals[0];
+  const proposal = activeProposal(run);
   const reason = policyReason(run);
+  const explanation = policyExplanation(run);
   const title = workflowTitle(run);
   return (
     <article aria-live="polite">
@@ -114,13 +115,13 @@ function WorkflowBody({
       </p>
       {run.status === "FAILED" && reason ? (
         <div className="mt-4">
-          <Infeasibility reason={reason} />
+          <Infeasibility reason={reason} explanation={explanation} />
         </div>
       ) : null}
       {run.plan ? <PlanPanel plan={run.plan} /> : null}
       <div className="mt-4">
         {proposal ? <ProposalSummary proposal={proposal} /> : reason && run.status !== "FAILED" ? (
-          <Infeasibility reason={reason} />
+          <Infeasibility reason={reason} explanation={explanation} />
         ) : !proposal && !reason ? (
           <p className="text-muted">No proposal was recorded.</p>
         ) : null}
@@ -216,8 +217,17 @@ export function workflowTitle(run: WorkflowRun): string {
   return parts.join(" · ");
 }
 
+export function activeProposal(run: WorkflowRun): Proposal | undefined {
+  return run.proposals.find((item) => item.status !== "SUPERSEDED") ?? run.proposals.at(-1);
+}
+
+function policyExplanation(run: WorkflowRun): string | null {
+  const policy = run.tasks.find((task) => task.agent_type === "policy");
+  return readString(policy?.results[0]?.facts.explanation);
+}
+
 export function workflowOutcome(run: WorkflowRun): string {
-  const proposal = run.proposals[0];
+  const proposal = activeProposal(run);
   const quantity = proposal?.arguments.quantity;
   if (typeof quantity === "number") return `${quantity} units`;
   const reason = readString(proposal?.arguments.reason) ?? policyReason(run);

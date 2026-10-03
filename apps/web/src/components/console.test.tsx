@@ -97,7 +97,13 @@ function goldenRun(): WorkflowRun {
         id: "55555555-5555-4555-8555-555555555555",
         workflow_run_id: runId,
         proposal_type: "reorder",
-        arguments: { quantity: 250, extended_cost_cents: 925000, sku: "ABC-42" },
+        arguments: {
+          quantity: 250,
+          extended_cost_cents: 925000,
+          sku: "ABC-42",
+          explanation: "The purchase quantity is 250. The purchase total requires manager approval.",
+          binding_constraints: ["case_pack"],
+        },
         estimated_impact: { extended_cost_cents: 925000 },
         risk_level: "medium",
         status: "PENDING_APPROVAL",
@@ -177,6 +183,9 @@ describe("operations console", () => {
 
     renderConsole(<WorkflowDetail runId={runId} />);
     expect(await screen.findByTestId("proposal-quantity")).toHaveTextContent("250 units");
+    expect(screen.getByTestId("proposal-explanation")).toHaveTextContent(
+      "The purchase quantity is 250.",
+    );
     expect(screen.getByTestId("approval-role")).toHaveTextContent("Manager approval required");
     expect(screen.getAllByTestId("status-badge")[0]).toHaveTextContent("Waiting approval");
     expect(screen.getByText("Available units")).toBeInTheDocument();

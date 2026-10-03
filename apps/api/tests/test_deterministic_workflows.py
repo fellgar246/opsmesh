@@ -80,6 +80,10 @@ def test_flags_stay_off_and_model_calls_are_zero(client: TestClient) -> None:
     proposal = stored["proposals"][0]
     assert proposal["arguments"]["quantity"] == 250
     assert proposal["arguments"]["extended_cost_cents"] == 925_000
+    assert proposal["arguments"]["requires_manager_approval"] is True
+    assert "case_pack" in proposal["arguments"]["binding_constraints"]
+    assert "250" in proposal["arguments"]["explanation"]
+    assert "requires manager approval" in proposal["arguments"]["explanation"]
     roles = {approval["required_role"] for approval in proposal["approvals"]}
     assert roles == {"procurement_manager"}
 
@@ -125,6 +129,7 @@ def test_insufficient_budget_drafts_no_purchase(
     body = _reorder(client)
     assert body["reason"] == "insufficient_budget"
     assert body["proposal_arguments"] is None
+    assert "insufficient_budget" in str(body["explanation"])
     run = client.get(f"/tenants/{NORTHWIND}/workflow-runs/{body['run_id']}")
     assert run.json()["proposals"] == []
     assert _orders(client) == before
@@ -134,6 +139,7 @@ def test_unapproved_supplier_is_blocked(client: TestClient) -> None:
     before = _orders(client)
     body = _reorder(client, sku="XYZ-9")
     assert body["reason"] == "supplier_not_approved"
+    assert body["quantity"] == 0
     assert body["proposal_arguments"] is None
     run = client.get(f"/tenants/{NORTHWIND}/workflow-runs/{body['run_id']}")
     assert run.json()["proposals"] == []
@@ -247,10 +253,10 @@ def test_budget_plan_funds_higher_risk_first(
 
 
 def test_quantity_rules_round_minimum_order_up_to_the_case_pack() -> None:
-    gross_need, quantity = rounded_need(0, 10, None, 1)
+    gross_need, quantity, _binding = rounded_need(0, 10, None, 1)
     assert gross_need == 10
     assert quantity == 10
-    _, raised = rounded_need(0, 10, 30, 50)
+    _, raised, _raised_binding = rounded_need(0, 10, 30, 50)
     assert raised == 60
     decision = solve_reorder(
         service_level=0.5,

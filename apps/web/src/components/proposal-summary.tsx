@@ -17,6 +17,10 @@ export function ProposalSummary({ proposal }: { proposal: Proposal }) {
     tone: "neutral",
   };
   const hash = proposal.approvals[0]?.arguments_hash;
+  const explanation = readString(proposal.arguments.explanation);
+  const binding = Array.isArray(proposal.arguments.binding_constraints)
+    ? proposal.arguments.binding_constraints.filter((item): item is string => typeof item === "string")
+    : [];
 
   return (
     <section
@@ -56,6 +60,16 @@ export function ProposalSummary({ proposal }: { proposal: Proposal }) {
           )}
         </div>
       </div>
+      {explanation ? (
+        <p className="mt-3 text-sm" data-testid="proposal-explanation">
+          {explanation}
+        </p>
+      ) : null}
+      {binding.length > 0 ? (
+        <p className="mt-2 text-[13px] text-muted">
+          Binding constraints {binding.join(", ")}
+        </p>
+      ) : null}
       {reasonInfo ? (
         <p className="mt-3 text-muted">
           {reasonInfo.label}
@@ -71,7 +85,13 @@ export function ProposalSummary({ proposal }: { proposal: Proposal }) {
   );
 }
 
-export function Infeasibility({ reason }: { reason: string }) {
+export function Infeasibility({
+  reason,
+  explanation,
+}: {
+  reason: string;
+  explanation?: string | null;
+}) {
   const info = reasonLabels[reason] ?? {
     label: reason,
     tone: "danger",
@@ -85,6 +105,11 @@ export function Infeasibility({ reason }: { reason: string }) {
       <h2 className="text-base font-semibold">{info.label}</h2>
       <p className="mt-1">{info.detail}</p>
       <p className="mt-2 font-mono text-[13px]">{reason}</p>
+      {explanation ? (
+        <p className="mt-2 text-sm" data-testid="constraint-explanation">
+          {explanation}
+        </p>
+      ) : null}
     </section>
   );
 }
