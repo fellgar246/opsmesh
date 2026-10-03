@@ -69,6 +69,7 @@ export type AgentTask = {
   input_hash: string;
   started_at: string | null;
   finished_at: string | null;
+  retry_count?: number;
   results: AgentResult[];
   tool_executions: ToolExecution[];
 };
@@ -116,6 +117,7 @@ export type WorkflowRun = {
   finished_at: string | null;
   cost_summary: CostSummary;
   plan?: SupervisorPlan | null;
+  reason?: string | null;
   tasks: AgentTask[];
   evidence: Evidence[];
   proposals: Proposal[];

@@ -108,6 +108,7 @@ class WorkflowRun(Base):
     finished_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
     cost_summary: Mapped[dict[str, Any]] = mapped_column(_json_document())
     plan: Mapped[dict[str, Any] | None] = mapped_column(_json_document(), nullable=True)
+    reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
 
 class AgentTask(Base):
@@ -116,6 +117,10 @@ class AgentTask(Base):
     __tablename__ = "agent_tasks"
     __table_args__ = (
         CheckConstraint(f"status IN ({_TASK_STATUSES})", name="ck_agent_tasks_status"),
+        CheckConstraint(
+            "retry_count >= 0 AND retry_count <= 2",
+            name="ck_agent_tasks_retries",
+        ),
         Index("ix_agent_tasks_run", "tenant_id", "workflow_run_id"),
     )
 
@@ -136,6 +141,26 @@ class AgentTask(Base):
     input_hash: Mapped[str] = mapped_column(String(64))
     started_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    retry_count: Mapped[int] = mapped_column(default=0, server_default=text("0"))
+
+
+class TaskTransition(Base):
+    """One persisted task status change. Later steps read this row, not a guess."""
+
+    __tablename__ = "task_transitions"
+    __table_args__ = (
+        CheckConstraint(f"from_status IN ({_TASK_STATUSES})", name="ck_task_transitions_from"),
+        CheckConstraint(f"to_status IN ({_TASK_STATUSES})", name="ck_task_transitions_to"),
+        Index("ix_task_transitions_task", "tenant_id", "task_id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.tenant_id"))
+    task_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("agent_tasks.id"))
+    from_status: Mapped[str] = mapped_column(String(32))
+    to_status: Mapped[str] = mapped_column(String(32))
+    reason: Mapped[str] = mapped_column(String(64))
+    occurred_at: Mapped[datetime] = mapped_column(UtcDateTime)
 
 
 class AgentResult(Base):

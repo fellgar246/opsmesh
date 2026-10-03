@@ -1,11 +1,15 @@
 """Insert and tenant-scoped reads for workflow records."""
 
-from uuid import UUID
+from datetime import datetime
+from typing import Any
+from uuid import UUID, uuid4
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from opsmesh_api.agents.ceilings import MAX_TASK_RETRIES
 from opsmesh_api.agents.plan_schema import SupervisorPlan, validate_plan
+from opsmesh_api.agents.transitions import IllegalTransition, assert_transition
 from opsmesh_api.services.models import Tenant
 from opsmesh_api.workflows.errors import PersistenceRejected, WorkflowNotFound
 from opsmesh_api.workflows.hashing import canonical_json_hash
@@ -15,8 +19,11 @@ from opsmesh_api.workflows.models import (
     Approval,
     Evidence,
     OperationalProposal,
+    TaskStatus,
+    TaskTransition,
     ToolExecution,
     WorkflowRun,
+    WorkflowStatus,
 )
 from opsmesh_api.workflows.schemas import (
     AgentResultCreate,
@@ -30,6 +37,7 @@ from opsmesh_api.workflows.schemas import (
     ProposalCreate,
     ProposalRead,
     ResultEvidenceItem,
+    TaskTransitionRead,
     ToolExecutionCreate,
     ToolExecutionRead,
     WarningItem,
@@ -60,6 +68,7 @@ class WorkflowStore:
             finished_at=body.finished_at,
             cost_summary=body.cost_summary.model_dump(mode="json"),
             plan=stored_plan,
+            reason=body.reason,
         )
         self._insert(row)
         return self.get_run(tenant_id, body.id)
@@ -84,11 +93,12 @@ class WorkflowStore:
             input_hash=canonical_json_hash(body.input),
             started_at=body.started_at,
             finished_at=body.finished_at,
+            retry_count=0,
         )
         self._insert(row)
         stored = self._task(tenant_id, run_id, body.id)
         assert stored is not None
-        return self._task_read(stored, [], [])
+        return self._task_read(stored, [], [], [])
 
     def add_result(
         self,
@@ -227,6 +237,93 @@ class WorkflowStore:
         self._insert(row)
         return self._tool_read(row)
 
+    def transition_task(
+        self,
+        tenant_id: str,
+        run_id: UUID,
+        task_id: UUID,
+        *,
+        status: TaskStatus,
+        reason: str,
+        at: datetime,
+        retry_count: int | None = None,
+    ) -> None:
+        """Commit one allowed status change before callers depend on it."""
+
+        row = self._task(tenant_id, run_id, task_id)
+        if row is None:
+            raise PersistenceRejected("task does not exist")
+        current = TaskStatus(row.status)
+        try:
+            assert_transition(current, status)
+        except IllegalTransition as exc:
+            raise PersistenceRejected(str(exc)) from exc
+        if retry_count is not None:
+            if retry_count > MAX_TASK_RETRIES:
+                raise PersistenceRejected("retries per task cannot exceed 2")
+            row.retry_count = retry_count
+        row.status = status.value
+        if status == TaskStatus.RUNNING:
+            row.started_at = at
+        if status in {
+            TaskStatus.COMPLETED,
+            TaskStatus.FAILED,
+            TaskStatus.CANCELLED,
+            TaskStatus.SKIPPED,
+        }:
+            row.finished_at = at
+        if status == TaskStatus.READY:
+            row.finished_at = None
+        self._db.flush()
+        self._db.add(
+            TaskTransition(
+                id=uuid4(),
+                tenant_id=tenant_id,
+                task_id=task_id,
+                from_status=current.value,
+                to_status=status.value,
+                reason=reason,
+                occurred_at=at,
+            )
+        )
+        self._db.commit()
+        self._db.refresh(row)
+
+    def set_retry_count(self, tenant_id: str, run_id: UUID, task_id: UUID, count: int) -> None:
+        """Commit how many retries a task has used. The ceiling is 2."""
+
+        if count > MAX_TASK_RETRIES:
+            raise PersistenceRejected("retries per task cannot exceed 2")
+        row = self._task(tenant_id, run_id, task_id)
+        if row is None:
+            raise PersistenceRejected("task does not exist")
+        row.retry_count = count
+        self._db.commit()
+
+    def update_run(
+        self,
+        tenant_id: str,
+        run_id: UUID,
+        *,
+        status: WorkflowStatus | None = None,
+        reason: str | None = None,
+        write_reason: bool = False,
+        finished_at: datetime | None = None,
+        cost_summary: dict[str, Any] | None = None,
+    ) -> None:
+        """Commit workflow status, reason, and cost after task transitions."""
+
+        run = self._require_run(tenant_id, run_id)
+        if status is not None:
+            run.status = status.value
+        if write_reason:
+            run.reason = reason
+        if finished_at is not None:
+            run.finished_at = finished_at
+        if cost_summary is not None:
+            run.cost_summary = cost_summary
+        self._db.commit()
+
     def list_runs(self, tenant_id: str) -> list[WorkflowRunRead]:
         """Return persisted runs for one tenant, newest start time first."""
 
@@ -276,6 +373,18 @@ class WorkflowStore:
             .where(Evidence.tenant_id == tenant_id, Evidence.workflow_run_id == run_id)
             .order_by(Evidence.id)
         ).all()
+        transitions = (
+            self._db.scalars(
+                select(TaskTransition)
+                .where(
+                    TaskTransition.tenant_id == tenant_id,
+                    TaskTransition.task_id.in_(task_ids),
+                )
+                .order_by(TaskTransition.occurred_at, TaskTransition.id)
+            ).all()
+            if task_ids
+            else []
+        )
         proposals = self._db.scalars(
             select(OperationalProposal)
             .where(
@@ -300,6 +409,9 @@ class WorkflowStore:
         tools_by_task: dict[UUID, list[ToolExecutionRead]] = {}
         for tool in tools:
             tools_by_task.setdefault(tool.task_id, []).append(self._tool_read(tool))
+        transitions_by_task: dict[UUID, list[TaskTransitionRead]] = {}
+        for item in transitions:
+            transitions_by_task.setdefault(item.task_id, []).append(self._transition_read(item))
         approvals_by_proposal: dict[UUID, list[ApprovalRead]] = {}
         for approval in approvals:
             approvals_by_proposal.setdefault(approval.proposal_id, []).append(
@@ -316,11 +428,13 @@ class WorkflowStore:
             finished_at=run.finished_at,
             cost_summary=run.cost_summary,  # type: ignore[arg-type]
             plan=None if run.plan is None else SupervisorPlan.model_validate(run.plan),
+            reason=run.reason,
             tasks=[
                 self._task_read(
                     task,
                     results_by_task.get(task.id, []),
                     tools_by_task.get(task.id, []),
+                    transitions_by_task.get(task.id, []),
                 )
                 for task in tasks
             ],
@@ -377,6 +491,7 @@ class WorkflowStore:
         task: AgentTask,
         results: list[AgentResultRead],
         tools: list[ToolExecutionRead],
+        transitions: list[TaskTransitionRead],
     ) -> AgentTaskRead:
         return AgentTaskRead(
             id=task.id,
@@ -389,8 +504,20 @@ class WorkflowStore:
             input_hash=task.input_hash,
             started_at=task.started_at,
             finished_at=task.finished_at,
+            retry_count=task.retry_count,
             results=results,
             tool_executions=tools,
+            transitions=transitions,
+        )
+
+    def _transition_read(self, row: TaskTransition) -> TaskTransitionRead:
+        return TaskTransitionRead(
+            id=row.id,
+            task_id=row.task_id,
+            from_status=row.from_status,  # type: ignore[arg-type]
+            to_status=row.to_status,  # type: ignore[arg-type]
+            reason=row.reason,
+            occurred_at=row.occurred_at,
         )
 
     def _result_read(self, row: AgentResult) -> AgentResultRead:

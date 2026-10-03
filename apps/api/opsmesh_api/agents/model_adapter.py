@@ -1,6 +1,7 @@
 """Model-backed specialists. Operational numbers come from tools, not from the model."""
 
 import json
+from threading import Lock
 from typing import Any
 from uuid import UUID
 
@@ -76,6 +77,7 @@ class ModelAgentAdapter:
         self._model = model
         self._model_id = model_id
         self._provenance: dict[UUID, tuple[str, str]] = {}
+        self._call_lock = Lock()
         self.model_calls = 0
 
     @property
@@ -86,6 +88,10 @@ class ModelAgentAdapter:
         return self._provenance.get(task_id, (None, None))
 
     def execute(self, task: AgentTask) -> AgentResultEnvelope:
+        with self._call_lock:
+            return self._execute_locked(task)
+
+    def _execute_locked(self, task: AgentTask) -> AgentResultEnvelope:
         if task.agent not in FACT_MODELS:
             return _failed(task, "unknown_agent", "The specialist is not available.")
         grounded = self._tools.execute(task)

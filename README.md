@@ -8,6 +8,8 @@ Simulator reads are named tools on a local registry. Each tool has an argument s
 
 The supervisor turns a request into a validated task graph and stores that plan on the workflow. It selects allowlisted specialists and does not query simulator data. Local runs use a deterministic planner. A model planner is used only when the model provider flag is on, and its output passes the same validator. More than four supervisor iterations fails the run.
 
+The coordinator executes that graph. Tasks with no unfinished dependencies start together, and a task starts only after every dependency has completed. A failed specialist leaves sibling results in place, skips dependents, and does not build a purchase from invented supplier data. Each task times out, retries at most twice, and the workflow itself stops at 180 seconds. Model-call and tool-call ceilings are checked before the next task starts.
+
 ## Requirements
 
 - Node.js 20 or newer

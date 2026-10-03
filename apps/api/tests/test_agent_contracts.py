@@ -194,7 +194,11 @@ def test_omitted_facts_and_unknown_agent_fail_the_task(
     assert demand.status == TaskStatus.FAILED
     assert "secret_decision" not in demand.results[0].facts
     assert demand.results[0].facts == {}
-    assert all("secret_decision" not in task.results[0].facts for task in stored.tasks)
+    assert all(
+        "secret_decision" not in result.facts
+        for task in stored.tasks
+        for result in task.results
+    )
 
 
 def test_schema_version_mismatch_is_rejected() -> None:

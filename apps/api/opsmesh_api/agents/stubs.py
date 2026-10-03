@@ -1,6 +1,7 @@
 """In-process specialists. They call the simulator or the policy service, never a model."""
 
 from datetime import UTC, datetime
+from threading import Lock
 from time import perf_counter
 from typing import Any
 
@@ -140,9 +141,14 @@ class StubAgentClient:
         self._supplier = SupplierService(db)
         self._finance = FinanceService(db)
         self._timeout_seconds = timeout_seconds
+        self._lock = Lock()
         self.tool_calls = 0
 
     def execute(self, task: AgentTask) -> AgentResultEnvelope:
+        with self._lock:
+            return self._execute(task)
+
+    def _execute(self, task: AgentTask) -> AgentResultEnvelope:
         if self._timeout_seconds is not None and self._timeout_seconds <= 0:
             return _failed(
                 task,

@@ -70,6 +70,7 @@ class WorkflowRunCreate(APIModel):
     finished_at: datetime | None = None
     cost_summary: CostSummary = Field(default_factory=CostSummary)
     plan: SupervisorPlan | None = None
+    reason: str | None = Field(default=None, max_length=64)
 
     @field_validator("input")
     @classmethod
@@ -235,6 +236,15 @@ class ToolExecutionRead(APIModel):
     result_reference: str | None
 
 
+class TaskTransitionRead(APIModel):
+    id: UUID
+    task_id: UUID
+    from_status: TaskStatus
+    to_status: TaskStatus
+    reason: str
+    occurred_at: datetime
+
+
 class AgentTaskRead(APIModel):
     id: UUID
     tenant_id: str
@@ -246,8 +256,10 @@ class AgentTaskRead(APIModel):
     input_hash: str
     started_at: datetime | None
     finished_at: datetime | None
+    retry_count: int = 0
     results: list[AgentResultRead]
     tool_executions: list[ToolExecutionRead]
+    transitions: list[TaskTransitionRead] = Field(default_factory=list)
 
 
 class ApprovalRead(APIModel):
@@ -285,6 +297,7 @@ class WorkflowRunRead(APIModel):
     finished_at: datetime | None
     cost_summary: CostSummary
     plan: SupervisorPlan | None = None
+    reason: str | None = None
     tasks: list[AgentTaskRead]
     evidence: list[EvidenceRead]
     proposals: list[ProposalRead]

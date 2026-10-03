@@ -8,8 +8,14 @@ from uuid import UUID, uuid4
 from sqlalchemy.orm import Session
 
 from opsmesh_api.agents.contracts import AgentClient
-from opsmesh_api.agents.coordinator import ReorderCoordination, ReorderCoordinator, SpecialistRun
-from opsmesh_api.agents.plan_schema import PlanValidationError, SupervisorPlan, parent_agents
+from opsmesh_api.agents.coordinator import ReorderCoordination
+from opsmesh_api.agents.fanout import PlanCoordinator
+from opsmesh_api.agents.plan_schema import (
+    PlanTask,
+    PlanValidationError,
+    SupervisorPlan,
+    parent_agents,
+)
 from opsmesh_api.agents.planner import (
     DeterministicPlanner,
     PlanningRequest,
@@ -39,6 +45,7 @@ from opsmesh_api.services.forecast import ForecastService
 from opsmesh_api.services.inventory import InventoryService
 from opsmesh_api.services.models import Tenant
 from opsmesh_api.services.supplier import SupplierService
+from opsmesh_api.workflows.journal import StoreJournal
 from opsmesh_api.workflows.models import (
     ApprovalRole,
     ApprovalStatus,
@@ -118,10 +125,13 @@ class OperationalEngine:
                 cost_summary=_planner_cost(self._planner, _latency(timer)),
             )
         client = self._agent_client or StubAgentClient(self._db)
-        outcome = ReorderCoordinator(client).run(
+        task_ids = self._seed_reorder(tenant_id, run_id, body, started, plan)
+        journal = StoreJournal(self._store, tenant_id, run_id, plan, task_ids)
+        outcome = PlanCoordinator(client, journal).run(
             workflow_id=run_id,
             tenant_id=tenant_id,
             request=body,
+            plan=plan,
         )
         latency_ms = _latency(timer)
         risk = RiskLevel.HIGH
@@ -138,16 +148,13 @@ class OperationalEngine:
         arguments = None
         if outcome.context is not None and outcome.context.proposals:
             arguments = outcome.context.proposals[0]
-        self._persist_reorder(
+        self._finish_reorder(
             tenant_id=tenant_id,
             run_id=run_id,
-            body=body,
             outcome=outcome,
-            started=started,
             latency_ms=latency_ms,
             proposal_arguments=arguments,
             risk_level=risk,
-            plan=plan,
         )
         math = outcome.math
         return ReorderRead(
@@ -172,104 +179,83 @@ class OperationalEngine:
             ),
         )
 
-    def _persist_reorder(
+    def _seed_reorder(
         self,
-        *,
         tenant_id: str,
         run_id: UUID,
         body: ReorderRequest,
-        outcome: ReorderCoordination,
         started: datetime,
-        latency_ms: int,
-        proposal_arguments: dict[str, Any] | None,
-        risk_level: RiskLevel,
         plan: SupervisorPlan,
-    ) -> None:
-        from opsmesh_api.workflows.hashing import canonical_json_hash
+    ) -> dict[str, UUID]:
+        """Open the run and its tasks before any specialist is started."""
+
         from opsmesh_api.workflows.schemas import WorkflowRunCreate
 
-        finished = datetime.now(UTC)
         self._store.create_run(
             tenant_id,
             WorkflowRunCreate(
                 id=run_id,
                 workflow_type="reorder",
                 requested_by=body.requested_by,
-                status=outcome.workflow_status,
+                status=WorkflowStatus.RUNNING,
                 input={
                     "sku": body.sku,
                     "region": body.region,
                     "service_level": body.service_level,
                 },
                 started_at=started,
-                finished_at=finished,
-                cost_summary=_cost(
-                    outcome.tool_calls,
-                    latency_ms,
-                    outcome.model_calls + self._planner.model_calls,
-                    self._planner.iterations,
-                ),
+                cost_summary=_planner_cost(self._planner, 0),
                 plan=plan,
             ),
         )
-        ids = {recorded.task.agent.value: recorded.task.task_id for recorded in outcome.runs}
-        for recorded in _ordered_runs(outcome.runs, plan):
+        ids = {task.id: uuid4() for task in plan.tasks}
+        for task in _topological_tasks(plan):
             depends_on = [
-                ids[parent]
-                for parent in parent_agents(plan, recorded.task.agent.value)
-                if parent in ids
+                ids[edge.depends_on] for edge in plan.dependencies if edge.task_id == task.id
             ]
-            task_input = {
-                "agent": recorded.task.agent.value,
-                "tenant_id": recorded.task.tenant_id,
-                "parameters": recorded.task.parameters,
-                "evidence_refs": [
-                    item.model_dump(mode="json") for item in recorded.task.evidence_refs
-                ],
-            }
             self._store.add_task(
                 tenant_id,
                 run_id,
                 AgentTaskCreate(
-                    id=recorded.task.task_id,
-                    agent_type=recorded.task.agent.value,
+                    id=ids[task.id],
+                    agent_type=task.agent,
                     depends_on=depends_on,
-                    status=recorded.status,
-                    input=task_input,
-                    started_at=started,
-                    finished_at=finished,
+                    status=TaskStatus.PENDING,
+                    input={
+                        "plan_task_id": task.id,
+                        "agent": task.agent,
+                        "parameters": task.input,
+                    },
                 ),
             )
-            self._store.add_result(
-                tenant_id,
-                run_id,
-                recorded.task.task_id,
-                AgentResultCreate(
-                    id=uuid4(),
-                    schema_version=recorded.envelope.schema_version,
-                    facts=recorded.decision_facts or {},
-                    evidence=recorded.envelope.evidence,
-                    warnings=recorded.envelope.warnings,
-                    confidence=recorded.envelope.confidence,
-                    model_id=recorded.model_id,
-                    prompt_version=recorded.prompt_version,
-                ),
-            )
-            if recorded.decision_facts is None or recorded.task.agent.value == "policy":
-                continue
-            for item in recorded.envelope.evidence:
-                self._store.add_evidence(
-                    tenant_id,
-                    run_id,
-                    EvidenceCreate(
-                        id=uuid4(),
-                        type=item.type,
-                        source=item.source,
-                        source_record_id=item.source_record_id,
-                        observed_at=item.observed_at,
-                        checksum=canonical_json_hash(recorded.decision_facts),
-                    ),
-                )
+        return ids
+
+    def _finish_reorder(
+        self,
+        *,
+        tenant_id: str,
+        run_id: UUID,
+        outcome: ReorderCoordination,
+        latency_ms: int,
+        proposal_arguments: dict[str, Any] | None,
+        risk_level: RiskLevel,
+    ) -> None:
+        finished = datetime.now(UTC)
+        summary = _cost(
+            outcome.tool_calls,
+            latency_ms,
+            outcome.model_calls + self._planner.model_calls,
+            self._planner.iterations,
+        )
+        self._store.update_run(
+            tenant_id,
+            run_id,
+            status=outcome.workflow_status,
+            reason=outcome.reason,
+            write_reason=True,
+            finished_at=finished,
+            cost_summary=summary.model_dump(mode="json"),
+        )
         if proposal_arguments is None:
             return
         proposal_id = uuid4()
@@ -1036,10 +1022,24 @@ def _ordered_names(names: list[str], plan: SupervisorPlan | None) -> list[str]:
     return ordered
 
 
-def _ordered_runs(runs: list[SpecialistRun], plan: SupervisorPlan) -> list[SpecialistRun]:
-    order = _ordered_names([run.task.agent.value for run in runs], plan)
-    rank = {name: index for index, name in enumerate(order)}
-    return sorted(runs, key=lambda run: rank.get(run.task.agent.value, len(rank)))
+def _topological_tasks(plan: SupervisorPlan) -> list[PlanTask]:
+    """Parents are inserted before the tasks that name them."""
+
+    deps: dict[str, list[str]] = {task.id: [] for task in plan.tasks}
+    for edge in plan.dependencies:
+        deps[edge.task_id].append(edge.depends_on)
+    pending = [task.id for task in plan.tasks]
+    ordered: list[str] = []
+    while pending:
+        ready = [
+            task_id for task_id in pending if all(parent in ordered for parent in deps[task_id])
+        ]
+        if not ready:
+            break
+        ordered.extend(ready)
+        pending = [task_id for task_id in pending if task_id not in ordered]
+    by_id = {task.id: task for task in plan.tasks}
+    return [by_id[task_id] for task_id in ordered]
 
 
 def _latency(timer: float) -> int:
