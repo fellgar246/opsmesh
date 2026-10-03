@@ -13,7 +13,12 @@ SPECIALIST_ALLOWLIST = frozenset({"inventory", "demand", "supplier", "finance", 
 
 _ENGLISH_REASON = re.compile(r"^[A-Za-z0-9 ,.'’:/()-]+$")
 _FORBIDDEN_INPUT_KEYS = frozenset({"tool", "tools", "sql", "query", "table", "statement"})
-_WRITE_TOOL_MARKERS = ("procurement.create", "procurement.draft", "procurement.write")
+_WRITE_TOOL_MARKERS = (
+    "procurement.create",
+    "procurement.draft",
+    "procurement.write",
+    "procurement.submit",
+)
 
 
 class PlanValidationError(Exception):

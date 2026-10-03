@@ -10,8 +10,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from opsmesh_api.agents.contracts import AgentType
-from opsmesh_api.services.errors import NotFoundError, StockConflictError
-from opsmesh_api.tools.catalog import READ_TOOL_SPECS, ToolSpec
+from opsmesh_api.services.errors import NotFoundError, ProcurementWriteError, StockConflictError
+from opsmesh_api.tools.catalog import READ_TOOL_SPECS, WRITE_TOOL_SPECS, ToolSpec
 from opsmesh_api.tools.port import (
     HandlerResult,
     ToolCall,
@@ -21,6 +21,7 @@ from opsmesh_api.tools.port import (
     ToolResult,
     ToolTaskNotFound,
 )
+from opsmesh_api.tools.schemas import WRITE_TOOL_NAMES, validated_arguments_hash
 from opsmesh_api.workflows.hashing import canonical_json_hash
 from opsmesh_api.workflows.models import AgentTask, ToolExecution, ToolStatus
 from opsmesh_api.workflows.schemas import ToolExecutionCreate
@@ -28,6 +29,8 @@ from opsmesh_api.workflows.store import WorkflowStore
 
 _FORBIDDEN_KINDS = frozenset({"url", "sql", "shell"})
 _READ_KIND = "read"
+_WRITE_KIND = "write"
+_EXECUTOR = frozenset({AgentType.PROCUREMENT_EXECUTOR})
 
 
 class LocalToolRegistry:
@@ -39,7 +42,8 @@ class LocalToolRegistry:
         self._specs: dict[str, ToolSpec] = {}
         self.handler_calls = 0
         self._cache: dict[tuple[UUID, str, str], ToolResult] = {}
-        for spec in READ_TOOL_SPECS if specs is None else specs:
+        registered = tuple(READ_TOOL_SPECS) + tuple(WRITE_TOOL_SPECS) if specs is None else specs
+        for spec in registered:
             self._add(spec)
 
     def invoke(self, call: ToolCall) -> ToolResult:
@@ -96,6 +100,8 @@ class LocalToolRegistry:
                 error_code="denied",
                 error_message="The tenant does not match the task.",
             )
+        if spec.kind == _WRITE_KIND:
+            arguments_hash = validated_arguments_hash(parsed)
         prior = self._prior(call, arguments_hash)
         succeeded = next((row for row in prior if row.status == ToolStatus.SUCCEEDED), None)
         if succeeded is not None:
@@ -117,6 +123,14 @@ class LocalToolRegistry:
                 arguments_hash,
                 error_code="stock_conflict",
                 error_message="Reserved units exceed on-hand units.",
+            )
+        except ProcurementWriteError as exc:
+            return self._fail(
+                call,
+                started,
+                arguments_hash,
+                error_code=exc.code,
+                error_message=exc.message,
             )
         return self._succeed(call, started, arguments_hash, payload, prior)
 
@@ -143,7 +157,7 @@ class LocalToolRegistry:
         )
 
     def _add(self, spec: ToolSpec) -> None:
-        if spec.kind in _FORBIDDEN_KINDS or spec.kind != _READ_KIND or not spec.read_only:
+        if not _can_register(spec):
             raise ToolRegistrationError("Only read-only tools can be registered.")
         if not spec.name or spec.name in self._specs:
             raise ToolRegistrationError("Tool names must be unique and stable.")
@@ -207,6 +221,15 @@ class LocalToolRegistry:
                 arguments_hash,
                 error_code="stock_conflict",
                 error_message="Reserved units exceed on-hand units.",
+                prior=prior,
+            )
+        except ProcurementWriteError as exc:
+            return self._fail(
+                call,
+                started,
+                arguments_hash,
+                error_code=exc.code,
+                error_message=exc.message,
                 prior=prior,
             )
         result = _result(
@@ -308,6 +331,19 @@ class LocalToolRegistry:
         if row is None:
             raise ToolTaskNotFound(call.task_id)
         return row
+
+
+def _can_register(spec: ToolSpec) -> bool:
+    if spec.kind in _FORBIDDEN_KINDS:
+        return False
+    if spec.kind == _READ_KIND and spec.read_only:
+        return True
+    return (
+        spec.kind == _WRITE_KIND
+        and not spec.read_only
+        and spec.name in WRITE_TOOL_NAMES
+        and spec.permitted_agents == _EXECUTOR
+    )
 
 
 def _next_retry(prior: list[ToolExecution]) -> int:

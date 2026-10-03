@@ -155,6 +155,9 @@ class PurchaseOrderRead(APIModel):
     quantity: int
     status: PurchaseOrderStatus
     expected_receipt_on: date
+    proposal_id: str | None = None
+    unit_cost_cents: int | None = None
+    idempotency_key: str | None = None
 
 
 class PurchaseOrderList(APIModel):

@@ -1,4 +1,4 @@
-"""Local read-only tool registry."""
+"""Local tool registry."""
 
 from opsmesh_api.tools.catalog import permitted_tool_names
 from opsmesh_api.tools.port import (

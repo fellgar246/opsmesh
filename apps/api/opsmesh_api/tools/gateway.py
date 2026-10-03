@@ -24,7 +24,7 @@ from opsmesh_api.agents.ceilings import MAX_TASK_RETRIES, TASK_TIMEOUT_SECONDS
 from opsmesh_api.agents.contracts import AgentType
 from opsmesh_api.agents.prompts import CONVERSION_ORDER
 from opsmesh_api.settings import Settings
-from opsmesh_api.tools.catalog import READ_TOOL_SPECS
+from opsmesh_api.tools.catalog import READ_TOOL_SPECS, WRITE_TOOL_SPECS
 from opsmesh_api.tools.port import (
     ToolCall,
     ToolDefinition,
@@ -34,6 +34,7 @@ from opsmesh_api.tools.port import (
     ToolTaskNotFound,
 )
 from opsmesh_api.tools.registry import LocalToolRegistry
+from opsmesh_api.tools.schemas import WRITE_TOOL_NAMES
 from opsmesh_api.workflows.hashing import canonical_json_hash
 from opsmesh_api.workflows.models import AgentTask, ToolExecution, ToolStatus
 from opsmesh_api.workflows.schemas import ToolExecutionCreate
@@ -325,7 +326,11 @@ def select_tool_port(
 
 
 class GatewayToolAdapter:
-    """`ToolPort` that sends specialist tool calls through the gateway."""
+    """`ToolPort` that sends specialist reads through the gateway.
+
+    Draft procurement writes always run on the local registry, so a gateway
+    session does not open a connection for them.
+    """
 
     def __init__(
         self,
@@ -351,6 +356,8 @@ class GatewayToolAdapter:
         return self._config
 
     def invoke(self, call: ToolCall) -> ToolResult:
+        if call.tool_name in WRITE_TOOL_NAMES:
+            return LocalToolRegistry(self._db).invoke(call)
         task = self._task(call)
         if task is None:
             raise ToolTaskNotFound(call.task_id)
@@ -446,19 +453,23 @@ class GatewayToolAdapter:
         )
 
     def permitted_tools(self, agent: AgentType) -> tuple[str, ...]:
-        return tuple(
-            sorted(
-                target.name
-                for target in self._targets.values()
-                if agent in target.permitted_agents
-            )
-        )
+        names = {
+            target.name
+            for target in self._targets.values()
+            if agent in target.permitted_agents
+        }
+        if agent == AgentType.PROCUREMENT_EXECUTOR:
+            names.update(spec.name for spec in WRITE_TOOL_SPECS)
+        return tuple(sorted(names))
 
     def schema_for(self, name: str) -> dict[str, Any]:
         target = self._targets.get(name)
-        if target is None:
+        if target is not None:
+            return target.json_schema
+        write = next((spec for spec in WRITE_TOOL_SPECS if spec.name == name), None)
+        if write is None:
             raise ToolNotRegistered(name)
-        return target.json_schema
+        return write.argument_model.model_json_schema()
 
     def _call_with_retry(
         self,

@@ -1,4 +1,4 @@
-"""Read-only handlers. They use the task tenant and do not write enterprise state."""
+"""Tool handlers. They use the task tenant. Draft writes stay inside the simulator."""
 
 from datetime import UTC, date, datetime
 from typing import Any
@@ -17,15 +17,18 @@ from opsmesh_api.tools.policy_rules import RULE_SUPPLIER_NOT_APPROVED, approval_
 from opsmesh_api.tools.port import HandlerResult
 from opsmesh_api.tools.schemas import (
     ApprovalRequirementArgs,
+    DraftPurchaseOrderArgs,
     ForecastArgs,
     PolicySearchArgs,
     PurchaseImpactArgs,
     PurchaseOrderArgs,
     SkuRegionArgs,
+    SubmitPurchaseOrderArgs,
     SupplierIdArgs,
     SupplierRestrictionArgs,
     SupplierTermsArgs,
     ToolArgs,
+    validated_arguments_hash,
 )
 
 
@@ -251,6 +254,46 @@ def policy_approval(db: Session, tenant_id: str, args: BaseModel) -> HandlerResu
             "rule_ids": approval_rule_ids(parsed.extended_cost_cents),
         },
         result_reference="policy:approval-requirement",
+    )
+
+
+def procurement_create_draft(db: Session, tenant_id: str, args: BaseModel) -> HandlerResult:
+    """Create one local draft. A matching replay returns the stored order."""
+
+    parsed = _expect(args, DraftPurchaseOrderArgs)
+    order = ProcurementService(db).create_draft_purchase_order(
+        tenant_id,
+        proposal_id=parsed.proposal_id,
+        sku=parsed.sku,
+        supplier_id=parsed.supplier_id,
+        quantity=parsed.quantity,
+        unit_cost_cents=parsed.unit_cost_cents,
+        idempotency_key=parsed.idempotency_key,
+        arguments_hash=validated_arguments_hash(parsed),
+    )
+    return HandlerResult(
+        source="procurement",
+        observed_at=_now(),
+        data=_dump(order),
+        result_reference=order.purchase_order_id,
+    )
+
+
+def procurement_submit_for_approval(db: Session, tenant_id: str, args: BaseModel) -> HandlerResult:
+    """Park a draft for approval. The proposal is not marked approved."""
+
+    parsed = _expect(args, SubmitPurchaseOrderArgs)
+    order = ProcurementService(db).submit_purchase_order_for_approval(
+        tenant_id,
+        purchase_order_id=parsed.purchase_order_id,
+        idempotency_key=parsed.idempotency_key,
+        arguments_hash=validated_arguments_hash(parsed),
+    )
+    return HandlerResult(
+        source="procurement",
+        observed_at=_now(),
+        data=_dump(order),
+        result_reference=order.purchase_order_id,
     )
 
 

@@ -1,4 +1,4 @@
-"""Read-only tool catalog. Names and allowlists stay stable for later gateways."""
+"""Tool catalog. Read tools can be served by the gateway. Draft writes stay local."""
 
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -9,12 +9,16 @@ from opsmesh_api.agents.contracts import AgentType
 from opsmesh_api.tools import handlers
 from opsmesh_api.tools.port import ToolHandler
 from opsmesh_api.tools.schemas import (
+    CREATE_DRAFT_TOOL,
+    SUBMIT_FOR_APPROVAL_TOOL,
     ApprovalRequirementArgs,
+    DraftPurchaseOrderArgs,
     ForecastArgs,
     PolicySearchArgs,
     PurchaseImpactArgs,
     PurchaseOrderArgs,
     SkuRegionArgs,
+    SubmitPurchaseOrderArgs,
     SupplierIdArgs,
     SupplierRestrictionArgs,
     SupplierTermsArgs,
@@ -26,11 +30,12 @@ _DEMAND = frozenset({AgentType.DEMAND})
 _SUPPLIER = frozenset({AgentType.SUPPLIER})
 _FINANCE = frozenset({AgentType.FINANCE})
 _POLICY = frozenset({AgentType.POLICY})
+_EXECUTOR = frozenset({AgentType.PROCUREMENT_EXECUTOR})
 
 
 @dataclass(frozen=True)
 class ToolSpec:
-    """One registered read tool before it is sealed into the registry."""
+    """One registered tool before it is sealed into the registry."""
 
     name: str
     argument_model: type[BaseModel]
@@ -152,10 +157,33 @@ READ_TOOL_SPECS: tuple[ToolSpec, ...] = (
 )
 
 
+WRITE_TOOL_SPECS: tuple[ToolSpec, ...] = (
+    ToolSpec(
+        CREATE_DRAFT_TOOL,
+        DraftPurchaseOrderArgs,
+        _EXECUTOR,
+        handlers.procurement_create_draft,
+        kind="write",
+        read_only=False,
+    ),
+    ToolSpec(
+        SUBMIT_FOR_APPROVAL_TOOL,
+        SubmitPurchaseOrderArgs,
+        _EXECUTOR,
+        handlers.procurement_submit_for_approval,
+        kind="write",
+        read_only=False,
+    ),
+)
+
+
 def permitted_tool_names(
     agent: AgentType, specs: Sequence[ToolSpec] | None = None
 ) -> tuple[str, ...]:
     """Return the sorted tool names granted to one agent."""
 
-    chosen = READ_TOOL_SPECS if specs is None else specs
+    if specs is None:
+        chosen: Sequence[ToolSpec] = tuple(READ_TOOL_SPECS) + tuple(WRITE_TOOL_SPECS)
+    else:
+        chosen = specs
     return tuple(sorted(spec.name for spec in chosen if agent in spec.permitted_agents))

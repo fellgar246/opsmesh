@@ -23,6 +23,7 @@ class AgentType(StrEnum):
     FINANCE = "finance"
     POLICY = "policy"
     SUPERVISOR = "supervisor"
+    PROCUREMENT_EXECUTOR = "procurement_executor"
 
 
 class AgentResultStatus(StrEnum):

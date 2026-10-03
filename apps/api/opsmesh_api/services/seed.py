@@ -14,6 +14,7 @@ from opsmesh_api.services.errors import FixtureError
 from opsmesh_api.services.models import (
     Budget,
     Forecast,
+    IdempotencyRecord,
     PurchaseOrder,
     SkuStock,
     StockoutEvent,
@@ -42,12 +43,13 @@ _SCORE_KEYS = frozenset({"quality", "reliability_score"})
 _CLEAR_ORDER = (
     ToolExecution,
     AgentResult,
+    IdempotencyRecord,
+    PurchaseOrder,
     Approval,
     OperationalProposal,
     Evidence,
     AgentTask,
     WorkflowRun,
-    PurchaseOrder,
     SupplierDelay,
     SupplierTerms,
     StockoutEvent,

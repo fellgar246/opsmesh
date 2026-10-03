@@ -15,7 +15,7 @@ from opsmesh_api.tools.port import (
     ToolResult,
 )
 from opsmesh_api.tools.registry import LocalToolRegistry
-from opsmesh_api.tools.schemas import ToolArgs
+from opsmesh_api.tools.schemas import WRITE_TOOL_NAMES, ToolArgs
 from opsmesh_api.workflows.hashing import canonical_json_hash
 from opsmesh_api.workflows.models import ToolExecution, ToolStatus
 from opsmesh_api.workflows.schemas import AgentTaskCreate, WorkflowRunCreate
@@ -162,8 +162,13 @@ def test_registered_reads_do_not_change_enterprise_state(
     with session_factory() as db:
         before = _enterprise_state(db)
         registry = LocalToolRegistry(db)
-        assert {item.name for item in registry.definitions()} == READ_TOOL_NAMES
-        assert all(item.read_only for item in registry.definitions())
+        assert {item.name for item in registry.definitions()} == READ_TOOL_NAMES | WRITE_TOOL_NAMES
+        assert all(
+            item.read_only for item in registry.definitions() if item.name in READ_TOOL_NAMES
+        )
+        assert all(
+            not item.read_only for item in registry.definitions() if item.name in WRITE_TOOL_NAMES
+        )
         assert registry.permitted_tools(AgentType.SUPERVISOR) == ()
         for agent in (
             AgentType.INVENTORY,

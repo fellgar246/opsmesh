@@ -16,3 +16,12 @@ class StockConflictError(Exception):
 
 class FixtureError(Exception):
     """Seed data failed validation and was not loaded."""
+
+
+class ProcurementWriteError(Exception):
+    """A draft write was rejected. The stored purchase order is unchanged."""
+
+    def __init__(self, code: str, message: str) -> None:
+        self.code = code
+        self.message = message
+        super().__init__(message)

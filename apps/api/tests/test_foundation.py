@@ -151,6 +151,7 @@ def test_decision_records_cover_the_baseline() -> None:
         "0012-policy-retrieval.md",
         "0013-specialist-runtime.md",
         "0014-tool-gateway.md",
+        "0015-draft-procurement-writes.md",
     ]
     planning_markers = ("_ori" + "gen/", "spe" + "cs/")
     for name in records:
