@@ -24,6 +24,7 @@ from opsmesh_api.agents.runtime import (
 )
 from opsmesh_api.agents.stubs import StubAgentClient
 from opsmesh_api.settings import Settings
+from opsmesh_api.tools.gateway import GatewayTransport, select_tool_port
 
 
 def enabled_agents(raw: str) -> tuple[AgentType, ...]:
@@ -104,10 +105,11 @@ def select_agent_client(
     model: ModelPort | None = None,
     runtime: AgentRuntimeTransport | None = None,
     local: AgentClient | None = None,
+    gateway: GatewayTransport | None = None,
 ) -> AgentClient:
     """Use stubs unless a cloud flag is actually on."""
 
-    resolved = local if local is not None else _local_client(db, settings, model)
+    resolved = local if local is not None else _local_client(db, settings, model, gateway)
     if not settings.cloud_capability(settings.cloud_agent_runtime_enabled):
         return resolved
     selected = selected_remote_agents(settings.remote_runtime_agents, CONVERSION_ORDER)
@@ -125,11 +127,21 @@ def select_agent_client(
     return RoutedAgentClient(resolved, remote, frozenset(selected))
 
 
-def _local_client(db: Session, settings: Settings, model: ModelPort | None) -> AgentClient:
+def _local_client(
+    db: Session,
+    settings: Settings,
+    model: ModelPort | None,
+    gateway: GatewayTransport | None = None,
+) -> AgentClient:
     if not settings.cloud_capability(settings.model_provider_enabled):
         return StubAgentClient(db)
     port = model if model is not None else BedrockModelClient(region=settings.bedrock_region)
-    adapter = ModelAgentAdapter(db, port, model_id=settings.bedrock_model_id)
+    adapter = ModelAgentAdapter(
+        db,
+        port,
+        model_id=settings.bedrock_model_id,
+        tools=select_tool_port(db, settings, gateway),
+    )
     enabled = enabled_agents(settings.model_backed_agents)
     return HybridAgentClient(StubAgentClient(db), adapter, enabled)
 

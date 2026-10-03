@@ -39,6 +39,11 @@ class Settings(BaseSettings):
     agent_runtime_endpoints: str = ""
     agent_runtime_identities: str = ""
     agent_runtime_qualifier: str = "DEFAULT"
+    cloud_tool_gateway_enabled: bool = False
+    tool_gateway_endpoint: str = ""
+    # agent=identity pairs. Empty uses opsmesh/<agent> for each specialist.
+    tool_gateway_identities: str = ""
+    tool_gateway_protocol_version: str = "2026-07-28"
     managed_retrieval_enabled: bool = False
     long_term_memory_enabled: bool = False
     automatic_schedules_enabled: bool = False
