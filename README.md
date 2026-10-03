@@ -4,6 +4,8 @@ Operations control plane for bounded, local-first workflows. The default executi
 
 Model-backed specialists run only when `AWS_AGENTIC_FEATURES_ENABLED` and `MODEL_PROVIDER_ENABLED` are both true. Otherwise the reorder workflow uses the local stubs, and the golden proposal stays the same. The live model provider is Amazon Bedrock. Local tests do not call it.
 
+A specialist runs on Amazon Bedrock AgentCore Runtime when `AWS_AGENTIC_FEATURES_ENABLED` and `CLOUD_AGENT_RUNTIME_ENABLED` are both true and that specialist is named in `REMOTE_RUNTIME_AGENTS`. Specialists are selected one at a time, in the order policy, inventory, supplier, finance, then demand. The reorder coordinator still accepts only the result envelope. The runtime SDK stays inside the runtime adapter, and the outbound call uses that specialist's agent identity. The local client is used unless both flags are on and the specialist is listed. Local tests use a fake runtime transport and do not call AWS. A live runtime check runs only when `OPSMESH_LIVE_AGENT_RUNTIME=1`.
+
 Simulator reads are named tools on a local registry. Each tool has an argument schema and an allowlist of agent types. A specialist cannot call another domain's tool, and the supervisor cannot call simulator tools. Denied and invalid calls are audited. The registry is the port a later remote gateway can implement.
 
 The supervisor turns a request into a validated task graph and stores that plan on the workflow. It selects allowlisted specialists and does not query simulator data. Local runs use a deterministic planner. A model planner is used only when the model provider flag is on, and its output passes the same validator. More than four supervisor iterations fails the run.

@@ -34,6 +34,11 @@ class Settings(BaseSettings):
     agentic_features_enabled: bool = False
     multi_agent_execution_enabled: bool = False
     cloud_agent_runtime_enabled: bool = False
+    # Blank selects no remote specialist. Names follow the conversion order.
+    remote_runtime_agents: str = ""
+    agent_runtime_endpoints: str = ""
+    agent_runtime_identities: str = ""
+    agent_runtime_qualifier: str = "DEFAULT"
     managed_retrieval_enabled: bool = False
     long_term_memory_enabled: bool = False
     automatic_schedules_enabled: bool = False

@@ -23,6 +23,10 @@ FLAG_NAMES = (
     "AGENTIC_FEATURES_ENABLED",
     "MULTI_AGENT_EXECUTION_ENABLED",
     "CLOUD_AGENT_RUNTIME_ENABLED",
+    "REMOTE_RUNTIME_AGENTS",
+    "AGENT_RUNTIME_ENDPOINTS",
+    "AGENT_RUNTIME_IDENTITIES",
+    "AGENT_RUNTIME_QUALIFIER",
     "MANAGED_RETRIEVAL_ENABLED",
     "LONG_TERM_MEMORY_ENABLED",
     "AUTOMATIC_SCHEDULES_ENABLED",
@@ -139,6 +143,7 @@ def test_decision_records_cover_the_baseline() -> None:
         "0010-fanout-coordinator.md",
         "0011-constraint-synthesis.md",
         "0012-policy-retrieval.md",
+        "0013-specialist-runtime.md",
     ]
     planning_markers = ("_ori" + "gen/", "spe" + "cs/")
     for name in records:

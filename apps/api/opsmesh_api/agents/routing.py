@@ -1,4 +1,4 @@
-"""Choose local stubs or model-backed specialists without changing the workflow."""
+"""Choose local stubs, model-backed specialists, or a remote runtime."""
 
 from uuid import UUID
 
@@ -14,6 +14,14 @@ from opsmesh_api.agents.planner import (
     SupervisorPlanner,
 )
 from opsmesh_api.agents.prompts import CONVERSION_ORDER
+from opsmesh_api.agents.runtime import (
+    AgentCoreRuntimeClient,
+    AgentRuntimeTransport,
+    RemoteAgentClient,
+    agent_identities,
+    remote_endpoints,
+    selected_remote_agents,
+)
 from opsmesh_api.agents.stubs import StubAgentClient
 from opsmesh_api.settings import Settings
 
@@ -57,19 +65,95 @@ class HybridAgentClient:
         return self._model.provenance_for(task_id)
 
 
+class RoutedAgentClient:
+    """Send selected specialists to the remote runtime and the rest to the local client."""
+
+    def __init__(
+        self,
+        local: AgentClient,
+        remote: RemoteAgentClient,
+        remote_agents: frozenset[AgentType],
+    ) -> None:
+        self._local = local
+        self._remote = remote
+        self._remote_agents = remote_agents
+
+    def execute(self, task: AgentTask) -> AgentResultEnvelope:
+        if task.agent in self._remote_agents:
+            return self._remote.execute(task)
+        return self._local.execute(task)
+
+    @property
+    def tool_calls(self) -> int:
+        return _count(self._local, "tool_calls") + _count(self._remote, "tool_calls")
+
+    @property
+    def model_calls(self) -> int:
+        return _count(self._local, "model_calls") + _count(self._remote, "model_calls")
+
+    def provenance_for(self, task_id: UUID) -> tuple[str | None, str | None]:
+        found = _provenance(self._local, task_id)
+        if found != (None, None):
+            return found
+        return _provenance(self._remote, task_id)
+
+
 def select_agent_client(
     db: Session,
     settings: Settings,
     model: ModelPort | None = None,
+    runtime: AgentRuntimeTransport | None = None,
+    local: AgentClient | None = None,
 ) -> AgentClient:
-    """Use stubs unless the model provider flag is actually on."""
+    """Use stubs unless a cloud flag is actually on."""
 
+    resolved = local if local is not None else _local_client(db, settings, model)
+    if not settings.cloud_capability(settings.cloud_agent_runtime_enabled):
+        return resolved
+    selected = selected_remote_agents(settings.remote_runtime_agents, CONVERSION_ORDER)
+    if not selected:
+        return resolved
+    transport = runtime if runtime is not None else AgentCoreRuntimeClient(
+        region=settings.bedrock_region,
+    )
+    remote = RemoteAgentClient(
+        remote_endpoints(selected, settings.agent_runtime_endpoints),
+        transport,
+        agent_identities(settings.agent_runtime_identities, CONVERSION_ORDER),
+        qualifier=settings.agent_runtime_qualifier,
+    )
+    return RoutedAgentClient(resolved, remote, frozenset(selected))
+
+
+def _local_client(db: Session, settings: Settings, model: ModelPort | None) -> AgentClient:
     if not settings.cloud_capability(settings.model_provider_enabled):
         return StubAgentClient(db)
     port = model if model is not None else BedrockModelClient(region=settings.bedrock_region)
     adapter = ModelAgentAdapter(db, port, model_id=settings.bedrock_model_id)
     enabled = enabled_agents(settings.model_backed_agents)
     return HybridAgentClient(StubAgentClient(db), adapter, enabled)
+
+
+def _count(client: AgentClient, name: str) -> int:
+    value = getattr(client, name, 0)
+    if isinstance(value, int):
+        return value
+    return 0
+
+
+def _provenance(client: AgentClient, task_id: UUID) -> tuple[str | None, str | None]:
+    lookup = getattr(client, "provenance_for", None)
+    if not callable(lookup):
+        return None, None
+    found = lookup(task_id)
+    if not isinstance(found, tuple) or len(found) != 2:
+        return None, None
+    model_id, prompt_version = found
+    if not isinstance(model_id, str) or not model_id:
+        model_id = None
+    if not isinstance(prompt_version, str) or not prompt_version:
+        prompt_version = None
+    return model_id, prompt_version
 
 
 def select_planner(settings: Settings, model: ModelPort | None = None) -> SupervisorPlanner:
