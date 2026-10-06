@@ -4,6 +4,25 @@ export type CostSummary = {
   latency_ms: number;
   estimated_cost_cents: number | null;
   supervisor_iterations?: number;
+  input_tokens?: number;
+  output_tokens?: number;
+};
+
+export type UsageLedger = {
+  workflow_id: string;
+  workflow_type: string;
+  input: Record<string, unknown>;
+  model_calls: number;
+  tool_calls: number;
+  input_tokens: number;
+  output_tokens: number;
+  estimated_cost_cents: number | null;
+};
+
+export type CostReport = {
+  workflows_started_today: number;
+  daily_ceiling: number;
+  workflows: UsageLedger[];
 };
 
 export type PlanTask = {
@@ -167,6 +186,65 @@ export type ReorderResponse = {
   quantity: number | null;
   requires_manager_approval: boolean;
   requires_finance_approval: boolean;
+};
+
+export type EvaluationFactAccuracy = {
+  matched: number;
+  total: number;
+};
+
+export type EvaluationDeterministic = {
+  correct_agents: number;
+  unnecessary_agents: number;
+  correct_tools: number;
+  forbidden_tools: number;
+  fact_accuracy: EvaluationFactAccuracy;
+  constraint_violations: number;
+  policy_violations: number;
+  approval_correct: number;
+  cross_tenant_failures: number;
+  ceilings_respected: boolean;
+};
+
+export type EvaluationEfficiency = {
+  task_completion: number;
+  workflows: number;
+  model_calls: number;
+  tool_calls: number;
+  latency_ms: number;
+  estimated_cost_per_successful_workflow_cents: number | null;
+};
+
+export type EvaluationCase = {
+  id: string;
+  category: string;
+  tenant_id: string;
+  passed: boolean;
+  failures: string[];
+  status: string;
+  model_calls: number;
+  tool_calls: number;
+  latency_ms: number;
+  estimated_cost_cents: number | null;
+};
+
+export type EvaluationRun = {
+  id: string;
+  tenant_id: string;
+  suite_version: string;
+  suite: string;
+  created_at: string;
+  passed: number;
+  failed: number;
+  deterministic: EvaluationDeterministic;
+  efficiency: EvaluationEfficiency;
+  cases: EvaluationCase[];
+  hosted_ingested: boolean;
+};
+
+export type EvaluationLatest = {
+  run: EvaluationRun | null;
+  previous: EvaluationRun | null;
 };
 
 export const terminalStatuses = new Set(["COMPLETED", "FAILED", "CANCELLED"]);

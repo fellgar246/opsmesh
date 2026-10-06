@@ -3,6 +3,8 @@ import type {
   ApprovalDetail,
   ApprovalItem,
   AuditEvent,
+  CostReport,
+  EvaluationLatest,
   ReorderResponse,
   Tenant,
   WorkflowRun,
@@ -199,4 +201,12 @@ export function startBudgetPlan(
     method: "POST",
     body: JSON.stringify(body),
   });
+}
+
+export function getCost(tenantId: string): Promise<CostReport> {
+  return apiRequest(tenantPath(tenantId, "/cost"));
+}
+
+export function getLatestEvaluation(tenantId: string): Promise<EvaluationLatest> {
+  return apiRequest(tenantPath(tenantId, "/evaluations/latest"));
 }

@@ -7,6 +7,8 @@ from opsmesh_api.logging import configure_logging
 from opsmesh_api.routes.approvals import router as approval_router
 from opsmesh_api.routes.audit import router as audit_router
 from opsmesh_api.routes.auth import router as auth_router
+from opsmesh_api.routes.cost import router as cost_router
+from opsmesh_api.routes.evaluations import router as evaluation_router
 from opsmesh_api.routes.finance import router as finance_router
 from opsmesh_api.routes.forecast import router as forecast_router
 from opsmesh_api.routes.health import router as health_router
@@ -40,6 +42,8 @@ def create_app() -> FastAPI:
     app.include_router(procurement_router)
     app.include_router(approval_router)
     app.include_router(audit_router)
+    app.include_router(evaluation_router)
+    app.include_router(cost_router)
     app.include_router(workflow_router)
     app.include_router(operations_router)
     return app

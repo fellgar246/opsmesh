@@ -1,6 +1,6 @@
 """Insert and tenant-scoped reads for workflow records."""
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from opsmesh_api.agents.ceilings import MAX_TASK_RETRIES
 from opsmesh_api.agents.plan_schema import SupervisorPlan, validate_plan
 from opsmesh_api.agents.transitions import IllegalTransition, assert_transition
+from opsmesh_api.cost.schema import UsageLedger
 from opsmesh_api.events.dispatch import publish_ready
 from opsmesh_api.events.recording import (
     record_approval_requested,
@@ -43,6 +44,7 @@ from opsmesh_api.workflows.schemas import (
     AgentTaskRead,
     ApprovalCreate,
     ApprovalRead,
+    CostSummary,
     EvidenceCreate,
     EvidenceRead,
     ProposalCreate,
@@ -377,6 +379,43 @@ class WorkflowStore:
         ).all()
         return [self.get_run(tenant_id, run.id) for run in runs]
 
+    def count_started_today(self, tenant_id: str, *, now: datetime | None = None) -> int:
+        """Count workflow starts for this tenant on the UTC day of `now`."""
+
+        self._require_tenant(tenant_id)
+        moment = datetime.now(UTC) if now is None else now.astimezone(UTC)
+        day = moment.date()
+        started = self._db.scalars(
+            select(WorkflowRun.started_at).where(WorkflowRun.tenant_id == tenant_id)
+        ).all()
+        return sum(1 for stamp in started if _utc_day(stamp) == day)
+
+    def usage_ledgers(self, tenant_id: str) -> list[UsageLedger]:
+        """Return per-workflow calls, tokens, and estimated cost."""
+
+        self._require_tenant(tenant_id)
+        runs = self._db.scalars(
+            select(WorkflowRun)
+            .where(WorkflowRun.tenant_id == tenant_id)
+            .order_by(WorkflowRun.started_at.desc(), WorkflowRun.id.desc())
+        ).all()
+        ledgers: list[UsageLedger] = []
+        for run in runs:
+            summary = CostSummary.model_validate(run.cost_summary)
+            ledgers.append(
+                UsageLedger(
+                    workflow_id=run.id,
+                    workflow_type=run.workflow_type,
+                    input=run.input,
+                    model_calls=summary.model_calls,
+                    tool_calls=summary.tool_calls,
+                    input_tokens=summary.input_tokens,
+                    output_tokens=summary.output_tokens,
+                    estimated_cost_cents=summary.estimated_cost_cents,
+                )
+            )
+        return ledgers
+
     def get_run(self, tenant_id: str, run_id: UUID) -> WorkflowRunRead:
         run = self._db.scalar(
             select(WorkflowRun).where(
@@ -622,3 +661,9 @@ class WorkflowStore:
             created_at=row.created_at,
             approvals=approvals,
         )
+
+
+def _utc_day(stamp: datetime) -> date:
+    if stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=UTC)
+    return stamp.astimezone(UTC).date()

@@ -169,6 +169,8 @@ def test_decision_records_cover_the_baseline() -> None:
         "0017-event-driven-operations.md",
         "0018-identity-tenant-isolation.md",
         "0019-managed-policy.md",
+        "0020-evaluation-suite.md",
+        "0021-cost-controls.md",
     ]
     planning_markers = ("_ori" + "gen/", "spe" + "cs/")
     for name in records:

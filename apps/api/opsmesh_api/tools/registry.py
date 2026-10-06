@@ -51,7 +51,7 @@ class LocalToolRegistry:
         self._policy = policy
         self._specs: dict[str, ToolSpec] = {}
         self.handler_calls = 0
-        self._cache: dict[tuple[UUID, str, str], ToolResult] = {}
+        self._cache: dict[tuple[UUID, str, str, str], ToolResult] = {}
         registered = tuple(READ_TOOL_SPECS) + tuple(WRITE_TOOL_SPECS) if specs is None else specs
         for spec in registered:
             self._add(spec)
@@ -141,6 +141,10 @@ class LocalToolRegistry:
             )
         if spec.kind == _WRITE_KIND:
             arguments_hash = validated_arguments_hash(parsed)
+        if spec.read_only:
+            cached = self._memoized(call, arguments_hash)
+            if cached is not None:
+                return cached
         prior = self._prior(call, arguments_hash)
         succeeded = next((row for row in prior if row.status == ToolStatus.SUCCEEDED), None)
         if succeeded is not None:
@@ -239,9 +243,9 @@ class LocalToolRegistry:
         succeeded: ToolExecution,
         prior: list[ToolExecution],
     ) -> ToolResult:
-        cached = self._cache.get((call.task_id, call.tool_name, arguments_hash))
+        cached = self._memoized(call, arguments_hash)
         if cached is not None:
-            return cached.model_copy()
+            return cached
         started = perf_counter()
         try:
             payload = self._execute(spec, call, parsed)
@@ -281,7 +285,7 @@ class LocalToolRegistry:
             execution_id=succeeded.id,
             payload=payload,
         )
-        self._cache[(call.task_id, call.tool_name, arguments_hash)] = result
+        self._remember_memo(call, arguments_hash, result)
         return result.model_copy()
 
     def _succeed(
@@ -308,8 +312,20 @@ class LocalToolRegistry:
             execution_id=stored.id,
             payload=payload,
         )
-        self._cache[(call.task_id, call.tool_name, arguments_hash)] = result
+        self._remember_memo(call, arguments_hash, result)
         return result.model_copy()
+
+    def _memo_key(self, call: ToolCall, arguments_hash: str) -> tuple[UUID, str, str, str]:
+        return (call.workflow_run_id, call.tenant_id, call.tool_name, arguments_hash)
+
+    def _memoized(self, call: ToolCall, arguments_hash: str) -> ToolResult | None:
+        found = self._cache.get(self._memo_key(call, arguments_hash))
+        if found is None:
+            return None
+        return found.model_copy()
+
+    def _remember_memo(self, call: ToolCall, arguments_hash: str, result: ToolResult) -> None:
+        self._cache[self._memo_key(call, arguments_hash)] = result
 
     def _fail(
         self,

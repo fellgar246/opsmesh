@@ -138,10 +138,10 @@ class _CountingClient:
         self.write_calls.append("procurement.create")
 
 
-def test_independent_tasks_overlap_and_finance_waits(
+def test_independent_tasks_overlap_and_supplier_waits_for_stock(
     session_factory: sessionmaker[Session],
 ) -> None:
-    barrier = Barrier(3)
+    barrier = Barrier(2)
     starts: dict[str, float] = {}
     finishes: dict[str, float] = {}
 
@@ -153,7 +153,7 @@ def test_independent_tasks_overlap_and_finance_waits(
 
         def execute(self, task: AgentTask) -> AgentResultEnvelope:
             starts[task.agent.value] = monotonic()
-            if task.agent.value in {"inventory", "demand", "supplier"}:
+            if task.agent.value in {"inventory", "demand"}:
                 barrier.wait(timeout=2)
             result = self._inner.execute(task)
             finishes[task.agent.value] = monotonic()
@@ -169,16 +169,15 @@ def test_independent_tasks_overlap_and_finance_waits(
             request=_request(),
             plan=plan,
         )
-    overlapped = ("inventory", "demand", "supplier")
-    assert max(starts[name] for name in overlapped) <= min(finishes[name] for name in overlapped)
-    assert starts["finance"] >= max(finishes[name] for name in overlapped)
+    assert max(starts["inventory"], starts["demand"]) <= min(
+        finishes["inventory"], finishes["demand"]
+    )
+    assert starts["supplier"] >= max(finishes["inventory"], finishes["demand"])
+    assert starts["finance"] >= finishes["supplier"]
     assert any(
         snapshot["inventory"] == TaskStatus.RUNNING
         and snapshot["demand"] == TaskStatus.RUNNING
-        and snapshot["supplier"] == TaskStatus.RUNNING
-        and snapshot["finance"] in {TaskStatus.PENDING, TaskStatus.READY}
-        and TaskStatus.COMPLETED
-        not in {snapshot["inventory"], snapshot["demand"], snapshot["supplier"]}
+        and snapshot["supplier"] == TaskStatus.PENDING
         for snapshot in journal.history
     )
     assert outcome.workflow_status == WorkflowStatus.WAITING_APPROVAL

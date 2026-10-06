@@ -262,6 +262,27 @@ describe("operations console", () => {
         if (url.endsWith("/tenants")) {
           return json({ tenants: [{ tenant_id: "northwind", name: "Northwind" }] });
         }
+        if (url.includes("/evaluations")) {
+          return json({ run: null, previous: null });
+        }
+        if (url.includes("/cost")) {
+          return json({
+            workflows_started_today: 0,
+            daily_ceiling: 15,
+            workflows: [
+              {
+                workflow_id: runId,
+                workflow_type: "reorder",
+                input: { sku: "ABC-42", region: "mx-central" },
+                model_calls: 0,
+                tool_calls: 6,
+                input_tokens: 0,
+                output_tokens: 0,
+                estimated_cost_cents: 0,
+              },
+            ],
+          });
+        }
         return json({ workflow_runs: [goldenRun()] });
       }),
     );
@@ -269,6 +290,36 @@ describe("operations console", () => {
     expect(await screen.findByTestId("cost-note")).toHaveTextContent("No model calls recorded");
     expect(screen.getByText("0 / 15")).toBeInTheDocument();
     expect(screen.getAllByText("$0.00").length).toBeGreaterThan(0);
+    expect(screen.getByText("Reorder · ABC-42 · mx-central")).toBeInTheDocument();
+  });
+
+  it("shows the last evaluation model-call delta on the cost page", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const session = sessionResponse(input);
+        if (session) return session;
+        const url = String(input);
+        if (url.endsWith("/tenants")) {
+          return json({ tenants: [{ tenant_id: "northwind", name: "Northwind" }] });
+        }
+        if (url.includes("/evaluations")) {
+          return json({
+            run: { efficiency: { model_calls: 4 } },
+            previous: { efficiency: { model_calls: 7 } },
+          });
+        }
+        return json({
+          workflows_started_today: 2,
+          daily_ceiling: 15,
+          workflows: [],
+        });
+      }),
+    );
+    renderConsole(<CostPage />);
+    expect(await screen.findByTestId("evaluation-model-delta")).toHaveTextContent(
+      "▼ 3 model calls (better)",
+    );
   });
 
   it("shows a failed task reason without leaving the page", async () => {

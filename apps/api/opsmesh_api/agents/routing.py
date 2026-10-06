@@ -8,9 +8,11 @@ from opsmesh_api.agents.bedrock import BedrockModelClient
 from opsmesh_api.agents.contracts import AgentClient, AgentResultEnvelope, AgentTask, AgentType
 from opsmesh_api.agents.model_adapter import ModelAgentAdapter
 from opsmesh_api.agents.model_port import ModelPort
+from opsmesh_api.agents.plan_schema import SupervisorPlan
 from opsmesh_api.agents.planner import (
     DeterministicPlanner,
     ModelSupervisorPlanner,
+    PlanningRequest,
     SupervisorPlanner,
 )
 from opsmesh_api.agents.prompts import CONVERSION_ORDER
@@ -68,6 +70,22 @@ class HybridAgentClient:
     def provenance_for(self, task_id: UUID) -> tuple[str | None, str | None]:
         return self._model.provenance_for(task_id)
 
+    @property
+    def input_tokens(self) -> int:
+        return _count(self._model, "input_tokens")
+
+    @property
+    def output_tokens(self) -> int:
+        return _count(self._model, "output_tokens")
+
+    @property
+    def unpriced_model(self) -> bool:
+        return _flag(self._model)
+
+    @property
+    def priced_model_id(self) -> str | None:
+        return _model_id(self._model)
+
 
 class RoutedAgentClient:
     """Send selected specialists to the remote runtime and the rest to the local client."""
@@ -101,6 +119,107 @@ class RoutedAgentClient:
             return found
         return _provenance(self._remote, task_id)
 
+    @property
+    def input_tokens(self) -> int:
+        return _count(self._local, "input_tokens") + _count(self._remote, "input_tokens")
+
+    @property
+    def output_tokens(self) -> int:
+        return _count(self._local, "output_tokens") + _count(self._remote, "output_tokens")
+
+    @property
+    def unpriced_model(self) -> bool:
+        return _flag(self._local) or _flag(self._remote)
+
+    @property
+    def priced_model_id(self) -> str | None:
+        return _model_id(self._local) or _model_id(self._remote)
+
+
+class FlaggedAgentClient:
+    """Use the local client for new work when the agentic cloud switch is off."""
+
+    def __init__(self, settings: Settings, local: AgentClient, remote: AgentClient) -> None:
+        self._settings = settings
+        self._local = local
+        self._remote = remote
+
+    def execute(self, task: AgentTask) -> AgentResultEnvelope:
+        if not self._settings.aws_agentic_features_enabled:
+            return self._local.execute(task)
+        return self._remote.execute(task)
+
+    @property
+    def tool_calls(self) -> int:
+        return _count(self._local, "tool_calls") + _count(self._remote, "tool_calls")
+
+    @property
+    def model_calls(self) -> int:
+        return _count(self._local, "model_calls") + _count(self._remote, "model_calls")
+
+    @property
+    def input_tokens(self) -> int:
+        return _count(self._local, "input_tokens") + _count(self._remote, "input_tokens")
+
+    @property
+    def output_tokens(self) -> int:
+        return _count(self._local, "output_tokens") + _count(self._remote, "output_tokens")
+
+    @property
+    def unpriced_model(self) -> bool:
+        return _flag(self._local) or _flag(self._remote)
+
+    @property
+    def priced_model_id(self) -> str | None:
+        return _model_id(self._remote) or _model_id(self._local)
+
+    def provenance_for(self, task_id: UUID) -> tuple[str | None, str | None]:
+        found = _provenance(self._remote, task_id)
+        if found != (None, None):
+            return found
+        return _provenance(self._local, task_id)
+
+
+class FlaggedPlanner:
+    """Plan locally when the agentic cloud switch is off, including the next call."""
+
+    def __init__(
+        self,
+        settings: Settings,
+        local: DeterministicPlanner,
+        remote: ModelSupervisorPlanner,
+    ) -> None:
+        self._settings = settings
+        self._local = local
+        self._remote = remote
+        self.iterations = 0
+        self.model_calls = 0
+
+    def plan(self, request: PlanningRequest) -> SupervisorPlan:
+        active: SupervisorPlanner = (
+            self._remote if self._settings.aws_agentic_features_enabled else self._local
+        )
+        plan = active.plan(request)
+        self.iterations = active.iterations
+        self.model_calls = active.model_calls
+        return plan
+
+    @property
+    def input_tokens(self) -> int:
+        return _count(self._local, "input_tokens") + _count(self._remote, "input_tokens")
+
+    @property
+    def output_tokens(self) -> int:
+        return _count(self._local, "output_tokens") + _count(self._remote, "output_tokens")
+
+    @property
+    def unpriced_model(self) -> bool:
+        return _flag(self._local) or _flag(self._remote)
+
+    @property
+    def priced_model_id(self) -> str | None:
+        return _model_id(self._remote) or _model_id(self._local)
+
 
 def select_agent_client(
     db: Session,
@@ -113,7 +232,11 @@ def select_agent_client(
 ) -> AgentClient:
     """Use stubs unless a cloud flag is actually on."""
 
-    resolved = local if local is not None else _local_client(db, settings, model, gateway)
+    fallback = local if local is not None else StubAgentClient(db)
+    if local is not None or not settings.cloud_capability(settings.model_provider_enabled):
+        resolved: AgentClient = fallback
+    else:
+        resolved = _local_client(db, settings, model, gateway)
     if settings.cloud_capability(settings.cloud_agent_runtime_enabled):
         selected = selected_remote_agents(settings.remote_runtime_agents, CONVERSION_ORDER)
         if selected:
@@ -131,7 +254,11 @@ def select_agent_client(
                 qualifier=settings.agent_runtime_qualifier,
             )
             resolved = RoutedAgentClient(resolved, remote, frozenset(selected))
-    return _with_policy(resolved, settings, policy_transport)
+    uses_cloud = resolved is not fallback
+    resolved = _with_policy(resolved, settings, policy_transport)
+    if settings.aws_agentic_features_enabled and uses_cloud:
+        return FlaggedAgentClient(settings, fallback, resolved)
+    return resolved
 
 
 def _with_policy(
@@ -166,8 +293,19 @@ def _local_client(
     return HybridAgentClient(StubAgentClient(db), adapter, enabled)
 
 
-def _count(client: AgentClient, name: str) -> int:
-    value = getattr(client, name, 0)
+def _flag(source: object) -> bool:
+    return bool(getattr(source, "unpriced_model", False))
+
+
+def _model_id(source: object) -> str | None:
+    value = getattr(source, "priced_model_id", None)
+    if isinstance(value, str) and value:
+        return value
+    return None
+
+
+def _count(source: object, name: str) -> int:
+    value = getattr(source, name, 0)
     if isinstance(value, int):
         return value
     return 0
@@ -194,4 +332,5 @@ def select_planner(settings: Settings, model: ModelPort | None = None) -> Superv
     if not settings.cloud_capability(settings.model_provider_enabled):
         return DeterministicPlanner()
     port = model if model is not None else BedrockModelClient(region=settings.bedrock_region)
-    return ModelSupervisorPlanner(port, model_id=settings.bedrock_model_id)
+    remote = ModelSupervisorPlanner(port, model_id=settings.bedrock_model_id)
+    return FlaggedPlanner(settings, DeterministicPlanner(), remote)

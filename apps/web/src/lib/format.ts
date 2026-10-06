@@ -12,6 +12,22 @@ export function formatMoneyCents(cents: number | null | undefined): string {
   return money.format(cents / 100);
 }
 
+export function modelCallDelta(current: number, previous: number): string {
+  const diff = current - previous;
+  if (diff === 0) return "0 model calls (same)";
+  if (diff < 0) return `▼ ${Math.abs(diff)} model calls (better)`;
+  return `▲ ${diff} model calls (worse)`;
+}
+
+export function costDelta(current: number | null, previous: number | null): string | null {
+  if (current === null || previous === null) return null;
+  const diff = current - previous;
+  if (diff === 0) return `${formatMoneyCents(0)} (same)`;
+  const amount = formatMoneyCents(Math.abs(diff));
+  if (diff < 0) return `▼ ${amount} (better)`;
+  return `▲ ${amount} (worse)`;
+}
+
 export function formatUnits(value: number): string {
   return `${units.format(value)} units`;
 }

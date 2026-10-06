@@ -25,6 +25,7 @@ from opsmesh_api.agents.planner import (
 from opsmesh_api.agents.planner import PlanCandidate as PlannerCandidate
 from opsmesh_api.agents.stubs import StubAgentClient
 from opsmesh_api.approvals.engine import APPROVAL_TTL as _APPROVAL_TTL
+from opsmesh_api.cost.pricing import estimate_cost_cents, usage_tokens
 from opsmesh_api.operations.policy import REASON_MISSING_EVIDENCE, approval_for_total
 from opsmesh_api.operations.quantity import select_demand
 from opsmesh_api.operations.risk import classify_stockout_risk, stockout_risk_score
@@ -90,6 +91,12 @@ class OperationalEngine:
         self._agent_client = agent_client
         self._planner = planner if planner is not None else DeterministicPlanner()
 
+    def started_today(self, tenant_id: str) -> int:
+        """Workflows this tenant has already started on the current UTC day."""
+
+        self._require_tenant(tenant_id)
+        return self._store.count_started_today(tenant_id)
+
     def reorder(self, tenant_id: str, body: ReorderRequest) -> ReorderRead:
         self._require_tenant(tenant_id)
         started = datetime.now(UTC)
@@ -135,17 +142,7 @@ class OperationalEngine:
             plan=plan,
         )
         latency_ms = _latency(timer)
-        risk = RiskLevel.HIGH
-        if outcome.math is not None and outcome.context is not None:
-            inventory = outcome.context.facts["inventory"]
-            supplier = outcome.context.facts["supplier"]
-            score = stockout_risk_score(
-                inventory["available_units"],
-                supplier["lead_time_days"],
-                outcome.math.selected_demand,
-                FORECAST_HORIZON_DAYS,
-            )
-            risk = classify_stockout_risk(score) if outcome.math.quantity > 0 else RiskLevel.LOW
+        risk = _reorder_risk(outcome)
         arguments = None
         if outcome.context is not None and outcome.context.proposals:
             arguments = outcome.context.proposals[0]
@@ -156,6 +153,7 @@ class OperationalEngine:
             latency_ms=latency_ms,
             proposal_arguments=arguments,
             risk_level=risk,
+            client=client,
         )
         math = outcome.math
         return ReorderRead(
@@ -178,6 +176,8 @@ class OperationalEngine:
                 latency_ms,
                 outcome.model_calls + self._planner.model_calls,
                 self._planner.iterations,
+                client=client,
+                planner=self._planner,
             ),
         )
 
@@ -241,6 +241,7 @@ class OperationalEngine:
         latency_ms: int,
         proposal_arguments: dict[str, Any] | None,
         risk_level: RiskLevel,
+        client: AgentClient | None = None,
     ) -> None:
         finished = datetime.now(UTC)
         summary = _cost(
@@ -248,6 +249,8 @@ class OperationalEngine:
             latency_ms,
             outcome.model_calls + self._planner.model_calls,
             self._planner.iterations,
+            client=client,
+            planner=self._planner,
         )
         self._store.update_run(
             tenant_id,
@@ -1005,18 +1008,49 @@ def _computed(
     )
 
 
+def _reorder_risk(outcome: ReorderCoordination) -> RiskLevel:
+    if outcome.math is not None and outcome.math.quantity == 0:
+        return RiskLevel.LOW
+    if outcome.math is None or outcome.context is None:
+        return RiskLevel.HIGH
+    inventory = outcome.context.facts.get("inventory")
+    supplier = outcome.context.facts.get("supplier")
+    if not isinstance(inventory, dict) or not isinstance(supplier, dict):
+        return RiskLevel.HIGH
+    score = stockout_risk_score(
+        inventory["available_units"],
+        supplier["lead_time_days"],
+        outcome.math.selected_demand,
+        FORECAST_HORIZON_DAYS,
+    )
+    return classify_stockout_risk(score)
+
+
 def _cost(
     tool_calls: int,
     latency_ms: int,
     model_calls: int = 0,
     supervisor_iterations: int = 0,
+    *,
+    client: object | None = None,
+    planner: object | None = None,
 ) -> CostSummary:
+    client_in, client_out, client_unpriced, client_model = usage_tokens(client)
+    planner_in, planner_out, planner_unpriced, planner_model = usage_tokens(planner)
     return CostSummary(
         model_calls=model_calls,
         tool_calls=tool_calls,
         latency_ms=latency_ms,
-        estimated_cost_cents=0,
+        estimated_cost_cents=estimate_cost_cents(
+            model_calls=model_calls,
+            input_tokens=client_in + planner_in,
+            output_tokens=client_out + planner_out,
+            model_id=client_model or planner_model,
+            unpriced=client_unpriced or planner_unpriced,
+        ),
         supervisor_iterations=supervisor_iterations,
+        input_tokens=client_in + planner_in,
+        output_tokens=client_out + planner_out,
     )
 
 
@@ -1025,7 +1059,13 @@ def _planner_cost(
     latency_ms: int,
     tool_calls: int = 0,
 ) -> CostSummary:
-    return _cost(tool_calls, latency_ms, planner.model_calls, planner.iterations)
+    return _cost(
+        tool_calls,
+        latency_ms,
+        planner.model_calls,
+        planner.iterations,
+        planner=planner,
+    )
 
 
 def _ordered_names(names: list[str], plan: SupervisorPlan | None) -> list[str]:

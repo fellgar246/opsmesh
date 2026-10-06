@@ -96,6 +96,25 @@ class PolicyGatedAgentClient:
     def model_calls(self) -> int:
         return _count(self._inner, "model_calls")
 
+    @property
+    def input_tokens(self) -> int:
+        return _count(self._inner, "input_tokens")
+
+    @property
+    def output_tokens(self) -> int:
+        return _count(self._inner, "output_tokens")
+
+    @property
+    def unpriced_model(self) -> bool:
+        return bool(getattr(self._inner, "unpriced_model", False))
+
+    @property
+    def priced_model_id(self) -> str | None:
+        value = getattr(self._inner, "priced_model_id", None)
+        if isinstance(value, str) and value:
+            return value
+        return None
+
     def provenance_for(self, task_id: UUID) -> tuple[str | None, str | None]:
         lookup = getattr(self._inner, "provenance_for", None)
         if not callable(lookup):

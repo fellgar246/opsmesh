@@ -9,6 +9,7 @@ from sqlalchemy import delete
 from sqlalchemy.orm import Session
 
 from opsmesh_api.db import SessionLocal
+from opsmesh_api.evaluation.models import EvaluationRun
 from opsmesh_api.events.models import (
     AnalyticsFact,
     AuditProjection,
@@ -51,6 +52,7 @@ _MONEY_KEYS = frozenset({"available_cents", "committed_cents", "unit_cost_cents"
 _SCORE_KEYS = frozenset({"quality", "reliability_score"})
 
 _CLEAR_ORDER = (
+    EvaluationRun,
     ProposalEffect,
     EvaluationSample,
     AnalyticsFact,

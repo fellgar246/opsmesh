@@ -50,6 +50,8 @@ class Settings(BaseSettings):
     event_bus_name: str = ""
     event_queue_url: str = ""
     managed_retrieval_enabled: bool = False
+    # Ingests the same fixtures after the local scorer. It does not score.
+    hosted_evaluation_enabled: bool = False
     long_term_memory_enabled: bool = False
     automatic_schedules_enabled: bool = False
     database_url: str = "postgresql+psycopg://opsmesh:opsmesh@localhost:5433/opsmesh"

@@ -30,6 +30,7 @@ from opsmesh_api.agents.model_port import (
 )
 from opsmesh_api.agents.prompts import PROMPT_VERSIONS, SYSTEM_PROMPTS
 from opsmesh_api.agents.stubs import StubAgentClient
+from opsmesh_api.cost.pricing import price_known
 from opsmesh_api.knowledge.policy_index import PolicySearchPort
 from opsmesh_api.operations.synthesis import narrative_contradicts, stated_purchase_quantities
 from opsmesh_api.tools.port import ToolPort
@@ -56,6 +57,10 @@ class ModelAgentAdapter:
         self._provenance: dict[UUID, tuple[str, str]] = {}
         self._call_lock = Lock()
         self.model_calls = 0
+        self.input_tokens = 0
+        self.output_tokens = 0
+        self.unpriced_model = False
+        self.priced_model_id: str | None = None
 
     @property
     def tool_calls(self) -> int:
@@ -87,6 +92,7 @@ class ModelAgentAdapter:
         except ModelProviderError:
             self._remember(task, request)
             return _failed(task, "model_provider", "The model provider did not return a result.")
+        self.output_tokens += completion.output_tokens
         self._remember(task, request)
         return self._interpret(task, completion, grounded)
 
@@ -110,7 +116,18 @@ class ModelAgentAdapter:
 
     def _remember(self, task: AgentTask, request: ModelCompletionRequest) -> None:
         self.model_calls += 1
+        self.input_tokens += estimate_tokens(request.system_prompt) + estimate_tokens(
+            request.user_prompt
+        )
+        self._note_model(request.model_id)
         self._provenance[task.task_id] = (request.model_id, request.prompt_version)
+
+    def _note_model(self, model_id: str) -> None:
+        if not price_known(model_id):
+            self.unpriced_model = True
+            return
+        if self.priced_model_id is None:
+            self.priced_model_id = model_id
 
     def _interpret(
         self,

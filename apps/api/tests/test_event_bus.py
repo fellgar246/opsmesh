@@ -106,29 +106,23 @@ def test_golden_reorder_publishes_a_stable_sequence(client: TestClient) -> None:
     events = local_bus().events_for(run_id)
     types = [event.event_type for event in events]
     assert types[0] is EventType.WORKFLOW_STARTED
-    assert types[1:4] == [EventType.TASK_DELEGATED] * 3
-    assert [event.payload["agent_type"] for event in events[1:4]] == [
-        "inventory",
-        "demand",
-        "supplier",
+    assert types[1:3] == [EventType.TASK_DELEGATED, EventType.TASK_DELEGATED]
+    assert [event.payload["agent_type"] for event in events[1:3]] == ["inventory", "demand"]
+    assert types[3:5] == [EventType.TASK_COMPLETED, EventType.TASK_COMPLETED]
+    assert {event.payload["agent_type"] for event in events[3:5]} == {"inventory", "demand"}
+    assert [(event.event_type, event.payload["agent_type"]) for event in events[5:11]] == [
+        (EventType.TASK_DELEGATED, "supplier"),
+        (EventType.TASK_COMPLETED, "supplier"),
+        (EventType.TASK_DELEGATED, "finance"),
+        (EventType.TASK_COMPLETED, "finance"),
+        (EventType.TASK_DELEGATED, "policy"),
+        (EventType.TASK_COMPLETED, "policy"),
     ]
-    assert types[4:7] == [EventType.TASK_COMPLETED] * 3
-    assert {event.payload["agent_type"] for event in events[4:7]} == {
-        "inventory",
-        "demand",
-        "supplier",
-    }
-    assert types[7:] == [
-        EventType.TASK_DELEGATED,
-        EventType.TASK_COMPLETED,
-        EventType.TASK_DELEGATED,
-        EventType.TASK_COMPLETED,
+    assert types[11:] == [
         EventType.WORKFLOW_COMPLETED,
         EventType.PROPOSAL_CREATED,
         EventType.APPROVAL_REQUESTED,
     ]
-    assert events[7].payload["agent_type"] == "finance"
-    assert events[9].payload["agent_type"] == "policy"
     for event in events:
         assert event.tenant_id == NORTHWIND
         assert event.workflow_id == run_id
