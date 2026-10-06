@@ -31,6 +31,7 @@ npm-debug.log*
 *.tfstate
 *.tfstate.*
 crash.log
+**/.build/
 override.tf
 override.tf.json
 *_override.tf

@@ -35,6 +35,7 @@ The policy agent explains that decision with citations from the versioned docume
 - Node.js 20 or newer
 - Python 3.12 or newer
 - [uv](https://docs.astral.sh/uv/)
+- Terraform 1.6 or newer, for the infrastructure check
 - PostgreSQL 16, for the API health check against a real database
 
 ## Local quality gate
@@ -45,7 +46,7 @@ From a clean checkout, with no cloud credentials:
 make check
 ```
 
-The command installs dependencies, then lints, type-checks, and tests `apps/web` and `apps/api`. It does not call a cloud provider. Cloud integration tests are skipped when credentials are absent.
+The command installs dependencies, then lints, type-checks, and tests `apps/web` and `apps/api`. It also formats and validates the Terraform stack. It does not call a cloud provider or apply infrastructure. Cloud integration tests are skipped when credentials are absent. Pull-request CI runs the same gate and a security scan. It does not deploy agents or run live model evaluation.
 
 Copy `.env.example` to `.env` only when you want local overrides. The API starts correctly from the defaults in code, which match the example file.
 
@@ -93,4 +94,33 @@ cd apps/api && uv run python -m opsmesh_api.services.seed
 | `infra` | Infrastructure modules |
 | `docs/adr` | Architecture decision records |
 
-Infrastructure in this repository is a skeleton. Applying it is a separate step and is not part of the local quality gate.
+## Demo environment
+
+The demo stack is Terraform. A default plan creates the budget, storage, event bus, identity pool, HTTP API, specialist runtimes, supervisor runtime, and tool gateway. It does not create memory, managed retrieval, managed policy, or the daily schedule. The monthly budget is 5 USD, with notifications at 1, 3, and 5 USD.
+
+Bootstrap once with your own credentials. That creates the encrypted state bucket, the lock table, and the GitHub OIDC deploy role:
+
+```bash
+export AWS_REGION=us-east-1
+export TF_VAR_aws_region=us-east-1
+export TF_VAR_state_bucket_name=your-unique-bucket
+export TF_VAR_github_repository=owner/name
+make bootstrap
+```
+
+Store the `deploy_role_arn` output as the GitHub variable `AWS_DEPLOY_ROLE_ARN`. Also set `AWS_REGION`, `TF_STATE_BUCKET`, and `TF_LOCK_TABLE`. Manual workflows assume that role through GitHub OIDC. They do not read a static access key.
+
+```bash
+export AWS_REGION=us-east-1
+export TF_STATE_BUCKET=your-unique-bucket
+export TF_LOCK_TABLE=opsmesh-dev-locks
+make plan
+AUTO_APPROVE=1 make deploy
+make smoke
+make cost-check
+AUTO_APPROVE=1 make destroy
+```
+
+`make agent-deploy` applies the specialist, supervisor, and gateway runtimes. Showcase modules stay off until you run `AUTO_APPROVE=1 infra/scripts/terraform.sh showcase`. `make smoke` calls `GET /health` and the read-only finance budget path. It does not submit a purchase order. Running destroy again after the stack is gone succeeds. Destroy does not delete the state bucket or the deploy role.
+
+Copy stack outputs into `EVENT_BUS_NAME`, `EVENT_QUEUE_URL`, `COGNITO_USER_POOL_ID`, `COGNITO_CLIENT_ID`, `AGENT_RUNTIME_ENDPOINTS`, and `TOOL_GATEWAY_ENDPOINT` when the API should use the demo. Details are in `infra/README.md`.

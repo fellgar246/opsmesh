@@ -10,5 +10,5 @@ output "alert_topic_arn" {
 
 output "tags" {
   description = "Tags applied to budget resources."
-  value       = local.tags
+  value       = var.tags
 }

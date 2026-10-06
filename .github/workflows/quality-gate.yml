@@ -4,6 +4,9 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   check:
     runs-on: ubuntu-latest
@@ -16,5 +19,19 @@ jobs:
         with:
           python-version: "3.12"
       - uses: astral-sh/setup-uv@v5
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.10.5"
+          terraform_wrapper: false
       - name: Lint, type-check, and test
         run: make check
+      - name: Security scan
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: secret,misconfig
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+          skip-dirs: node_modules,.venv,.terraform,.build
+          version: v0.75.0
