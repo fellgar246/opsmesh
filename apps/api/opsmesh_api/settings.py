@@ -49,6 +49,18 @@ class Settings(BaseSettings):
     cloud_event_bus_enabled: bool = False
     event_bus_name: str = ""
     event_queue_url: str = ""
+    # The approval wait uses Step Functions only when the master switch is also on.
+    cloud_state_machine_enabled: bool = False
+    state_machine_arn: str = ""
+    # fixture is the local simulator. demandpilot calls an external forecast API.
+    forecast_provider: Literal["fixture", "demandpilot"] = "fixture"
+    demandpilot_base_url: str = ""
+    demandpilot_api_token: str = ""
+    demandpilot_timeout_seconds: float = 5.0
+    # local=external pairs. Tenant ids are never sent unless they appear here.
+    demandpilot_tenant_map: str = ""
+    # Blank disables cache fallback. A number is the freshness window in seconds.
+    demandpilot_freshness_seconds: str = ""
     managed_retrieval_enabled: bool = False
     # Ingests the same fixtures after the local scorer. It does not score.
     hosted_evaluation_enabled: bool = False

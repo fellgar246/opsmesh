@@ -5,7 +5,16 @@ from enum import StrEnum
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import JSON, CheckConstraint, ForeignKey, Index, String, Uuid, text
+from sqlalchemy import (
+    JSON,
+    CheckConstraint,
+    ForeignKey,
+    Index,
+    String,
+    UniqueConstraint,
+    Uuid,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import TypeEngine
@@ -278,6 +287,51 @@ class AuditRecord(Base):
         nullable=True,
     )
     detail: Mapped[str | None] = mapped_column(String(2000), nullable=True)
+
+
+class ApprovalProcessState(StrEnum):
+    WAITING = "waiting"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    EXPIRED = "expired"
+    DRAFT_CREATED = "draft_created"
+    NOTIFIED = "notified"
+
+
+class ProcessSignalKind(StrEnum):
+    APPROVE = "approve"
+    REJECT = "reject"
+    TIMEOUT = "timeout"
+
+
+_PROCESS_STATES = ", ".join(f"'{item.value}'" for item in ApprovalProcessState)
+_PROCESS_SIGNALS = ", ".join(f"'{item.value}'" for item in ProcessSignalKind)
+
+
+class ApprovalProcess(Base):
+    """One approval wait. The row stores the proposal, the state, and the last signal."""
+
+    __tablename__ = "approval_processes"
+    __table_args__ = (
+        CheckConstraint(f"state IN ({_PROCESS_STATES})", name="ck_approval_processes_state"),
+        CheckConstraint(
+            f"last_signal IS NULL OR last_signal IN ({_PROCESS_SIGNALS})",
+            name="ck_approval_processes_signal",
+        ),
+        UniqueConstraint("tenant_id", "proposal_id", name="uq_approval_processes_proposal"),
+        Index("ix_approval_processes_proposal", "tenant_id", "proposal_id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.tenant_id"))
+    proposal_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("operational_proposals.id"),
+    )
+    state: Mapped[str] = mapped_column(String(32))
+    last_signal: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    arguments_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(UtcDateTime)
 
 
 class ToolExecution(Base):

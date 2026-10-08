@@ -210,6 +210,12 @@ def specialist_task(
     allowed = PARAMETER_FIELDS[agent]
     sliced = {key: value for key, value in parameters.items() if key in allowed}
     refs = [ref for ref in context.evidence_refs if ref.source == agent.value]
+    if agent is AgentType.DEMAND:
+        known = {(item.type, item.source, item.source_record_id) for item in refs}
+        for ref in context.evidence_refs:
+            key = (ref.type, ref.source, ref.source_record_id)
+            if ref.type == "forecast" and key not in known:
+                refs.append(ref)
     return AgentTask(
         task_id=task_id,
         agent=agent,

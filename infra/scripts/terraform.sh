@@ -64,6 +64,7 @@ case "${command}" in
     export TF_VAR_enable_managed_retrieval=true
     export TF_VAR_enable_managed_policy=true
     export TF_VAR_enable_showcase=true
+    export TF_VAR_enable_state_machine=true
     init_remote
     # shellcheck disable=SC2046
     terraform -chdir="${ENV_DIR}" apply -input=false -lock-timeout=2m $(approve_args)

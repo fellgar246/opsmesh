@@ -247,7 +247,7 @@ def test_demand_can_read_the_forecast_and_not_the_budget(
             )
         )
         assert forecast.status == ToolStatus.SUCCEEDED
-        assert forecast.source == "forecast"
+        assert forecast.source == "fixture"
         assert forecast.data is not None
         assert forecast.data["p50"] == 310
         assert forecast.data["p90"] == 345

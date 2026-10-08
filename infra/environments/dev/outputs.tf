@@ -43,6 +43,11 @@ output "gateway_url" {
   value       = one(module.gateway[*].gateway_url)
 }
 
+output "state_machine_arn" {
+  description = "Approval wait state machine for STATE_MACHINE_ARN. Null when the machine is off."
+  value       = one(module.state_machine[*].state_machine_arn)
+}
+
 output "optional_modules" {
   description = "Showcase modules. A default plan leaves every value false."
   value = {
@@ -50,5 +55,6 @@ output "optional_modules" {
     managed_retrieval = var.enable_managed_retrieval
     managed_policy    = var.enable_managed_policy
     showcase          = var.enable_showcase
+    state_machine     = var.enable_state_machine
   }
 }

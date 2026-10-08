@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from opsmesh_api.agents.ceilings import MAX_WORKFLOWS_PER_DAY
 from opsmesh_api.agents.routing import select_agent_client, select_planner
 from opsmesh_api.db import get_db
+from opsmesh_api.forecasts.select import select_forecast_provider
 from opsmesh_api.operations.engine import OperationalEngine
 from opsmesh_api.operations.schemas import (
     BudgetPlanRead,
@@ -33,10 +34,12 @@ def _engine(
     db: Annotated[Session, Depends(get_db)],
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> OperationalEngine:
+    provider = select_forecast_provider(db, settings)
     return OperationalEngine(
         db,
-        agent_client=select_agent_client(db, settings),
+        agent_client=select_agent_client(db, settings, forecast_provider=provider),
         planner=select_planner(settings),
+        forecast_provider=provider,
     )
 
 

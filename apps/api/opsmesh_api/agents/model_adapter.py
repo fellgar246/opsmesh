@@ -31,6 +31,7 @@ from opsmesh_api.agents.model_port import (
 from opsmesh_api.agents.prompts import PROMPT_VERSIONS, SYSTEM_PROMPTS
 from opsmesh_api.agents.stubs import StubAgentClient
 from opsmesh_api.cost.pricing import price_known
+from opsmesh_api.forecasts.port import DemandForecastProvider
 from opsmesh_api.knowledge.policy_index import PolicySearchPort
 from opsmesh_api.operations.synthesis import narrative_contradicts, stated_purchase_quantities
 from opsmesh_api.tools.port import ToolPort
@@ -49,8 +50,11 @@ class ModelAgentAdapter:
         model_id: str,
         tools: ToolPort | None = None,
         policy_search: PolicySearchPort | None = None,
+        forecast_provider: DemandForecastProvider | None = None,
     ) -> None:
-        self._tools = StubAgentClient(db, policy_search=policy_search)
+        self._tools = StubAgentClient(
+            db, policy_search=policy_search, forecast_provider=forecast_provider
+        )
         self._tool_port = tools if tools is not None else LocalToolRegistry(db)
         self._model = model
         self._model_id = model_id

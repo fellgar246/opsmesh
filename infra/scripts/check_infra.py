@@ -28,6 +28,7 @@ def main() -> None:
         "enable_managed_retrieval",
         "enable_managed_policy",
         "enable_showcase",
+        "enable_state_machine",
     ):
         block = variable_block(variables, name)
         if not re.search(r"default\s*=\s*false", block):

@@ -155,6 +155,37 @@ def assess_submit(
     return SubmitAssessment(True, True, "ok", "", expire_ids)
 
 
+def decision_recorded(
+    db: Session,
+    proposal: OperationalProposal,
+    *,
+    arguments_hash: str,
+    status: ApprovalStatus,
+) -> bool:
+    """Whether this proposal already has the requested decision for the hash."""
+
+    needed = required_roles(proposal_extended_cost(proposal))
+    rows = _proposal_approvals(db, proposal.tenant_id, proposal.id)
+    if status is ApprovalStatus.REJECTED:
+        return any(
+            row.required_role in needed
+            and row.status == ApprovalStatus.REJECTED.value
+            and row.arguments_hash == arguments_hash
+            for row in rows
+        )
+    if status is not ApprovalStatus.APPROVED or not needed:
+        return False
+    return all(
+        any(
+            row.required_role == role
+            and row.status == ApprovalStatus.APPROVED.value
+            and row.arguments_hash == arguments_hash
+            for row in rows
+        )
+        for role in needed
+    )
+
+
 def expire_approvals(db: Session, approval_ids: tuple[UUID, ...]) -> None:
     """Mark past-due pending rows expired. The caller commits."""
 

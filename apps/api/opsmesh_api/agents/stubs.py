@@ -15,6 +15,8 @@ from opsmesh_api.agents.contracts import (
     AgentTask,
     AgentType,
 )
+from opsmesh_api.forecasts.fixture import FixtureForecastProvider
+from opsmesh_api.forecasts.port import DemandForecastProvider
 from opsmesh_api.knowledge.policy_index import (
     WARNING_CITATION_CONTRADICTS,
     WARNING_CITATION_MISSING,
@@ -28,7 +30,6 @@ from opsmesh_api.knowledge.policy_index import (
 from opsmesh_api.operations.policy import approval_for_total
 from opsmesh_api.services.errors import NotFoundError, StockConflictError
 from opsmesh_api.services.finance import FinanceService
-from opsmesh_api.services.forecast import ForecastService
 from opsmesh_api.services.inventory import InventoryService
 from opsmesh_api.services.supplier import SupplierService
 from opsmesh_api.workflows.models import Confidence
@@ -191,9 +192,12 @@ class StubAgentClient:
         *,
         timeout_seconds: float | None = None,
         policy_search: PolicySearchPort | None = None,
+        forecast_provider: DemandForecastProvider | None = None,
     ) -> None:
         self._inventory = InventoryService(db)
-        self._forecast = ForecastService(db)
+        self._forecast = (
+            forecast_provider if forecast_provider is not None else FixtureForecastProvider(db)
+        )
         self._supplier = SupplierService(db)
         self._finance = FinanceService(db)
         self._policy_search = policy_search if policy_search is not None else product_policy_index()
@@ -281,7 +285,7 @@ class StubAgentClient:
     def _demand_stub(self, task: AgentTask) -> AgentResultEnvelope:
         params = _DemandParams.model_validate(task.parameters)
         self.tool_calls += 1
-        forecast = self._forecast.get_forecast(
+        forecast = self._forecast.read(
             task.tenant_id, params.sku, params.region, params.horizon_days
         )
         facts = {
@@ -297,8 +301,8 @@ class StubAgentClient:
             [
                 _evidence(
                     "forecast",
-                    AgentType.DEMAND.value,
-                    f"{forecast.sku}:{forecast.region}:{forecast.horizon_days}",
+                    forecast.provider,
+                    forecast.source_record_id,
                     forecast.observed_at,
                 )
             ],

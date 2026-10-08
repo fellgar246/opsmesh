@@ -140,3 +140,10 @@ module "knowledge_base" {
   aws_region  = var.aws_region
   tags        = local.tags
 }
+
+module "state_machine" {
+  count       = var.enable_state_machine ? 1 : 0
+  source      = "../../modules/state_machine"
+  name_prefix = local.name_prefix
+  tags        = local.tags
+}

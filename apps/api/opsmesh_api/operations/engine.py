@@ -26,6 +26,8 @@ from opsmesh_api.agents.planner import PlanCandidate as PlannerCandidate
 from opsmesh_api.agents.stubs import StubAgentClient
 from opsmesh_api.approvals.engine import APPROVAL_TTL as _APPROVAL_TTL
 from opsmesh_api.cost.pricing import estimate_cost_cents, usage_tokens
+from opsmesh_api.forecasts.fixture import FixtureForecastProvider
+from opsmesh_api.forecasts.port import DemandForecastProvider, ForecastReading
 from opsmesh_api.operations.policy import REASON_MISSING_EVIDENCE, approval_for_total
 from opsmesh_api.operations.quantity import select_demand
 from opsmesh_api.operations.risk import classify_stockout_risk, stockout_risk_score
@@ -44,7 +46,6 @@ from opsmesh_api.operations.schemas import (
 from opsmesh_api.operations.synthesis import synthesize
 from opsmesh_api.services.errors import NotFoundError
 from opsmesh_api.services.finance import FinanceService
-from opsmesh_api.services.forecast import ForecastService
 from opsmesh_api.services.inventory import InventoryService
 from opsmesh_api.services.models import Tenant
 from opsmesh_api.services.supplier import SupplierService
@@ -81,10 +82,13 @@ class OperationalEngine:
         db: Session,
         agent_client: AgentClient | None = None,
         planner: SupervisorPlanner | None = None,
+        forecast_provider: DemandForecastProvider | None = None,
     ) -> None:
         self._db = db
         self._inventory = InventoryService(db)
-        self._forecast = ForecastService(db)
+        self._forecast = (
+            forecast_provider if forecast_provider is not None else FixtureForecastProvider(db)
+        )
         self._supplier = SupplierService(db)
         self._finance = FinanceService(db)
         self._store = WorkflowStore(db)
@@ -132,7 +136,7 @@ class OperationalEngine:
                 reason=error.code,
                 cost_summary=_planner_cost(self._planner, _latency(timer)),
             )
-        client = self._agent_client or StubAgentClient(self._db)
+        client = self._agent_client or StubAgentClient(self._db, forecast_provider=self._forecast)
         task_ids = self._seed_reorder(tenant_id, run_id, body, started, plan)
         journal = StoreJournal(self._store, tenant_id, run_id, plan, task_ids)
         outcome = PlanCoordinator(client, journal).run(
@@ -385,21 +389,14 @@ class OperationalEngine:
                 )
                 try:
                     calls += 1
-                    forecast = self._forecast.get_forecast(
+                    forecast = self._forecast.read(
                         tenant_id, snapshot.sku, snapshot.region, FORECAST_HORIZON_DAYS
                     )
                 except NotFoundError:
                     return self._failed_delay(
                         tenant_id, body, delay.delay_id, started, timer, calls, facts, plan
                     )
-                facts.append(
-                    _from_model(
-                        "demand",
-                        "forecast",
-                        f"{snapshot.sku}:{snapshot.region}:{FORECAST_HORIZON_DAYS}",
-                        forecast,
-                    )
-                )
+                facts.append(_forecast_fact(forecast))
                 calls += 1
                 terms = self._supplier.get_terms(tenant_id, body.supplier_id, snapshot.sku)
                 # The delay pushes receipt out, so lead time includes delay days.
@@ -514,17 +511,10 @@ class OperationalEngine:
                     )
                 )
                 calls += 1
-                forecast = self._forecast.get_forecast(
+                forecast = self._forecast.read(
                     tenant_id, candidate.sku, candidate.region, FORECAST_HORIZON_DAYS
                 )
-                facts.append(
-                    _from_model(
-                        "demand",
-                        "forecast",
-                        f"{candidate.sku}:{candidate.region}:{FORECAST_HORIZON_DAYS}",
-                        forecast,
-                    )
-                )
+                facts.append(_forecast_fact(forecast))
                 calls += 1
                 preferred = self._supplier.get_preferred(tenant_id, candidate.sku)
                 calls += 1
@@ -866,7 +856,7 @@ class OperationalEngine:
             evidence_items = [
                 ResultEvidenceItem(
                     type=fact.evidence_type,
-                    source=fact.agent_type,
+                    source=fact.evidence_source,
                     source_record_id=fact.source_record_id,
                     observed_at=fact.observed_at,
                 )
@@ -896,7 +886,7 @@ class OperationalEngine:
                 EvidenceCreate(
                     id=uuid4(),
                     type=fact.evidence_type,
-                    source=fact.agent_type,
+                    source=fact.evidence_source,
                     source_record_id=fact.source_record_id,
                     observed_at=fact.observed_at,
                     checksum=fact.checksum,
@@ -961,6 +951,7 @@ class _Fact:
         payload: dict[str, Any],
         observed_at: datetime,
         checksum: str,
+        evidence_source: str | None = None,
     ) -> None:
         self.agent_type = agent_type
         self.evidence_type = evidence_type
@@ -968,9 +959,28 @@ class _Fact:
         self.payload = payload
         self.observed_at = observed_at
         self.checksum = checksum
+        self.evidence_source = evidence_source or agent_type
 
 
-def _from_model(agent_type: str, evidence_type: str, source_record_id: str, model: Any) -> _Fact:
+def _forecast_fact(reading: ForecastReading) -> _Fact:
+    """Cite the provider and source record that produced the quantiles."""
+
+    return _from_model(
+        "demand",
+        "forecast",
+        reading.source_record_id,
+        reading,
+        evidence_source=reading.provider,
+    )
+
+
+def _from_model(
+    agent_type: str,
+    evidence_type: str,
+    source_record_id: str,
+    model: Any,
+    evidence_source: str | None = None,
+) -> _Fact:
     from opsmesh_api.workflows.hashing import canonical_json_hash
 
     payload = model.model_dump(mode="json")
@@ -986,6 +996,7 @@ def _from_model(agent_type: str, evidence_type: str, source_record_id: str, mode
         payload,
         stamp,
         canonical_json_hash(payload),
+        evidence_source,
     )
 
 

@@ -25,6 +25,7 @@ from opsmesh_api.agents.runtime import (
     selected_remote_agents,
 )
 from opsmesh_api.agents.stubs import StubAgentClient
+from opsmesh_api.forecasts.port import DemandForecastProvider
 from opsmesh_api.policy.gate import PolicyGatedAgentClient
 from opsmesh_api.policy.managed import ManagedPolicyTransport, select_policy_port
 from opsmesh_api.policy.port import LocalPolicyPort
@@ -229,14 +230,17 @@ def select_agent_client(
     local: AgentClient | None = None,
     gateway: GatewayTransport | None = None,
     policy_transport: ManagedPolicyTransport | None = None,
+    forecast_provider: DemandForecastProvider | None = None,
 ) -> AgentClient:
     """Use stubs unless a cloud flag is actually on."""
 
-    fallback = local if local is not None else StubAgentClient(db)
+    fallback = (
+        local if local is not None else StubAgentClient(db, forecast_provider=forecast_provider)
+    )
     if local is not None or not settings.cloud_capability(settings.model_provider_enabled):
         resolved: AgentClient = fallback
     else:
-        resolved = _local_client(db, settings, model, gateway)
+        resolved = _local_client(db, settings, model, gateway, forecast_provider)
     if settings.cloud_capability(settings.cloud_agent_runtime_enabled):
         selected = selected_remote_agents(settings.remote_runtime_agents, CONVERSION_ORDER)
         if selected:
@@ -279,18 +283,22 @@ def _local_client(
     settings: Settings,
     model: ModelPort | None,
     gateway: GatewayTransport | None = None,
+    forecast_provider: DemandForecastProvider | None = None,
 ) -> AgentClient:
     if not settings.cloud_capability(settings.model_provider_enabled):
-        return StubAgentClient(db)
+        return StubAgentClient(db, forecast_provider=forecast_provider)
     port = model if model is not None else BedrockModelClient(region=settings.bedrock_region)
     adapter = ModelAgentAdapter(
         db,
         port,
         model_id=settings.bedrock_model_id,
         tools=select_tool_port(db, settings, gateway),
+        forecast_provider=forecast_provider,
     )
     enabled = enabled_agents(settings.model_backed_agents)
-    return HybridAgentClient(StubAgentClient(db), adapter, enabled)
+    return HybridAgentClient(
+        StubAgentClient(db, forecast_provider=forecast_provider), adapter, enabled
+    )
 
 
 def _flag(source: object) -> bool:

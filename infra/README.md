@@ -13,7 +13,7 @@ A plan with the default variables creates:
 - model-invoke permission for the configured foundation model
 - specialist runtimes, the supervisor runtime, and the tool gateway
 
-It does not create memory, the knowledge base, the managed policy engine, or the daily schedule. Those turn on only when `enable_memory`, `enable_managed_retrieval`, `enable_managed_policy`, and `enable_showcase` are true.
+It does not create memory, the knowledge base, the managed policy engine, the daily schedule, or the approval state machine. Those turn on only when `enable_memory`, `enable_managed_retrieval`, `enable_managed_policy`, `enable_showcase`, and `enable_state_machine` are true.
 
 ## State and identity
 
@@ -46,4 +46,4 @@ AUTO_APPROVE=1 make destroy
 
 `make check` formats and validates both roots without cloud credentials. `OPSMESH_BASE_URL` selects the smoke target and defaults to the local API. Point it at the HTTP API output to smoke the deployed probe. Destroy is safe to repeat after the resources are already gone.
 
-`AUTO_APPROVE=1 infra/scripts/terraform.sh showcase` enables memory, managed retrieval, managed policy, and the daily schedule in the same state. Destroy removes those resources too. It does not remove the state bucket or the deploy role.
+`AUTO_APPROVE=1 infra/scripts/terraform.sh showcase` enables memory, managed retrieval, managed policy, the daily schedule, and the approval state machine in the same state. Destroy removes those resources too. It does not remove the state bucket or the deploy role.

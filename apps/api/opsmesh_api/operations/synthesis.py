@@ -185,7 +185,7 @@ def synthesize_from_facts(
     for source, record_id in evidence_refs:
         by_source.setdefault(source, record_id)
     inventory_ref = by_source.get("inventory", "")
-    demand_ref = by_source.get("demand", "")
+    demand_ref = _forecast_record(evidence_refs)
     supplier_ref = by_source.get("supplier", "")
     finance_ref = by_source.get("finance", "")
     case_pack_supplied = "case_pack" in supplier
@@ -316,6 +316,23 @@ def _approval_sentence(outcome: ConstraintOutcome) -> str:
 
 def _positive_quantities(text: str) -> bool:
     return any(item > 0 for item in stated_purchase_quantities(text))
+
+
+def _forecast_record(evidence_refs: list[tuple[str, str]]) -> str:
+    """Return the record that produced the quantiles.
+
+    The demand specialist cites itself as ``demand``. A forecast provider cites
+    its own name, which is not inventory, supplier, finance, or policy.
+    """
+
+    for source, record_id in evidence_refs:
+        if source == "demand" and record_id:
+            return record_id
+    reserved = {"inventory", "supplier", "finance", "policy"}
+    for source, record_id in evidence_refs:
+        if source not in reserved and record_id:
+            return record_id
+    return ""
 
 
 def _cited(evidence: dict[str, str]) -> dict[str, str] | None:

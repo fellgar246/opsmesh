@@ -6,6 +6,7 @@ from typing import Any
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from opsmesh_api.forecasts.select import select_forecast_provider
 from opsmesh_api.knowledge.policy_index import PolicySearch, product_policy_index, retrieval_query
 from opsmesh_api.operations.policy import approval_for_total
 from opsmesh_api.services.finance import FinanceService
@@ -13,6 +14,7 @@ from opsmesh_api.services.forecast import ForecastService
 from opsmesh_api.services.inventory import InventoryService
 from opsmesh_api.services.procurement import ProcurementService
 from opsmesh_api.services.supplier import SupplierService
+from opsmesh_api.settings import get_settings
 from opsmesh_api.tools.policy_rules import RULE_SUPPLIER_NOT_APPROVED, approval_rule_ids
 from opsmesh_api.tools.port import HandlerResult
 from opsmesh_api.tools.schemas import (
@@ -77,14 +79,14 @@ def inventory_reorder_parameters(db: Session, tenant_id: str, args: BaseModel) -
 
 def forecast_get(db: Session, tenant_id: str, args: BaseModel) -> HandlerResult:
     parsed = _expect(args, ForecastArgs)
-    forecast = ForecastService(db).get_forecast(
+    reading = select_forecast_provider(db, get_settings()).read(
         tenant_id, parsed.sku, parsed.region, parsed.horizon_days
     )
     return HandlerResult(
-        source="forecast",
-        observed_at=forecast.observed_at,
-        data=_dump(forecast),
-        result_reference=f"forecast:{parsed.sku}:{parsed.region}:{parsed.horizon_days}",
+        source=reading.provider,
+        observed_at=reading.observed_at,
+        data=reading.model_dump(mode="json"),
+        result_reference=reading.source_record_id,
     )
 
 

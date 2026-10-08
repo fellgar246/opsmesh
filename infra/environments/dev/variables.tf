@@ -74,3 +74,9 @@ variable "enable_showcase" {
   type        = bool
   default     = false
 }
+
+variable "enable_state_machine" {
+  description = "Create the approval wait state machine. Off unless showcase is enabled."
+  type        = bool
+  default     = false
+}
