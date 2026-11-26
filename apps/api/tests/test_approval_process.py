@@ -28,6 +28,7 @@ from opsmesh_api.workflows.approval_machine import (
 from opsmesh_api.workflows.hashing import canonical_json_hash
 from opsmesh_api.workflows.models import (
     Approval,
+    ApprovalProcess,
     ApprovalProcessState,
     ApprovalRole,
     ApprovalStatus,
@@ -38,7 +39,7 @@ from opsmesh_api.workflows.models import (
 from opsmesh_api.workflows.schemas import ApprovalCreate, ProposalCreate, WorkflowRunCreate
 from opsmesh_api.workflows.state_machine_cloud import StepFunctionsApprovalProcess
 from opsmesh_api.workflows.store import WorkflowStore
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session, sessionmaker
 
 NORTHWIND = "northwind"
@@ -104,7 +105,6 @@ def test_duplicate_approve_does_not_call_draft_again(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     proposal_id, _run_id, arguments_hash = _waiting(db)
-    _decide(db, proposal_id, "approve")
     calls: list[str] = []
     original = ProcurementService.create_draft_purchase_order
 
@@ -113,6 +113,7 @@ def test_duplicate_approve_does_not_call_draft_again(
         return original(self, tenant_id, **kwargs)
 
     monkeypatch.setattr(ProcurementService, "create_draft_purchase_order", _record)
+    _decide(db, proposal_id, "approve")
     machine = LocalApprovalProcess(db)
     machine.start(NORTHWIND, proposal_id)
     machine.signal(NORTHWIND, proposal_id, _approve(arguments_hash), now=STARTED)
@@ -173,8 +174,12 @@ def test_reject_leaves_no_draft_after_the_rejection_event(db: Session) -> None:
     assert _rejected_event(db, run_id, proposal_id)
 
 
-def test_hash_mismatch_stops_before_the_draft(db: Session) -> None:
+def test_hash_mismatch_stops_before_the_draft(
+    db: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     proposal_id, _run_id, arguments_hash = _waiting(db)
+    monkeypatch.setattr(ApprovalService, "_signal_wait", lambda *_args: None)
     _decide(db, proposal_id, "approve")
     proposal = _proposal(db, proposal_id)
     changed = dict(proposal.arguments)
@@ -257,6 +262,75 @@ def test_local_profile_does_not_construct_a_state_machine_client(
     assert ("boto3" in sys.modules) is loaded
 
 
+def test_requesting_an_approval_opens_the_wait(db: Session) -> None:
+    proposal_id, _run_id, _arguments_hash = _waiting(db)
+
+    assert _wait(db, proposal_id).state == ApprovalProcessState.WAITING.value
+
+
+def test_approving_through_the_service_creates_the_draft(db: Session) -> None:
+    proposal_id, run_id, _arguments_hash = _waiting(db)
+
+    _decide(db, proposal_id, "approve")
+
+    assert _wait(db, proposal_id).state == ApprovalProcessState.NOTIFIED.value
+    assert len(_orders(db, proposal_id)) == 1
+    assert len(_notifications(db, run_id)) == 1
+
+
+def test_rejecting_through_the_service_leaves_no_draft(db: Session) -> None:
+    proposal_id, _run_id, _arguments_hash = _waiting(db)
+
+    _decide(db, proposal_id, "reject")
+
+    assert _wait(db, proposal_id).state == ApprovalProcessState.REJECTED.value
+    assert _orders(db, proposal_id) == []
+
+
+def test_the_draft_waits_for_every_required_role(db: Session) -> None:
+    proposal_id, _run_id, _arguments_hash = _waiting(
+        db,
+        quantity=1000,
+        roles=(ApprovalRole.PROCUREMENT_MANAGER, ApprovalRole.FINANCE_APPROVER),
+    )
+
+    _decide(db, proposal_id, "approve", ApprovalRole.PROCUREMENT_MANAGER)
+    assert _wait(db, proposal_id).state == ApprovalProcessState.WAITING.value
+    assert _orders(db, proposal_id) == []
+
+    _decide(db, proposal_id, "approve", ApprovalRole.FINANCE_APPROVER)
+    assert _wait(db, proposal_id).state == ApprovalProcessState.NOTIFIED.value
+    assert len(_orders(db, proposal_id)) == 1
+
+
+def test_reading_the_queue_after_expiry_delivers_the_timeout(db: Session) -> None:
+    proposal_id, _run_id, _arguments_hash = _waiting(db)
+    service = ApprovalService(db)
+
+    service.list_approvals(NORTHWIND, now=STARTED + APPROVAL_TTL - timedelta(seconds=1))
+    assert _wait(db, proposal_id).state == ApprovalProcessState.WAITING.value
+
+    queue = service.list_approvals(NORTHWIND, now=STARTED + APPROVAL_TTL)
+
+    assert _wait(db, proposal_id).state == ApprovalProcessState.EXPIRED.value
+    assert _proposal(db, proposal_id).status == ProposalStatus.EXPIRED.value
+    assert [item.status for item in queue.approvals if item.proposal_id == proposal_id] == [
+        ApprovalStatus.EXPIRED.value
+    ]
+    assert _orders(db, proposal_id) == []
+
+
+def test_a_proposal_from_before_the_wait_still_gets_its_draft(db: Session) -> None:
+    proposal_id, _run_id, _arguments_hash = _waiting(db)
+    db.execute(delete(ApprovalProcess).where(ApprovalProcess.proposal_id == proposal_id))
+    db.commit()
+
+    _decide(db, proposal_id, "approve")
+
+    assert _wait(db, proposal_id).state == ApprovalProcessState.NOTIFIED.value
+    assert len(_orders(db, proposal_id)) == 1
+
+
 def test_managed_start_calls_step_functions(db: Session) -> None:
     proposal_id, _run_id, _arguments_hash = _waiting(db)
     client = _Started()
@@ -266,6 +340,8 @@ def test_managed_start_calls_step_functions(db: Session) -> None:
         cloud_state_machine_enabled=True,
         state_machine_arn="arn:aws:states:us-east-1:000000000000:stateMachine:approval-wait",
     )
+    db.execute(delete(ApprovalProcess).where(ApprovalProcess.proposal_id == proposal_id))
+    db.commit()
     machine = StepFunctionsApprovalProcess(db, settings, client=client)
 
     started = machine.start(NORTHWIND, proposal_id)
@@ -294,11 +370,15 @@ def test_missing_state_machine_arn_fails_closed(db: Session) -> None:
     assert client.calls == []
 
 
-def _waiting(db: Session) -> tuple[UUID, UUID, str]:
+def _waiting(
+    db: Session,
+    quantity: int = 250,
+    roles: tuple[ApprovalRole, ...] = (ApprovalRole.PROCUREMENT_MANAGER,),
+) -> tuple[UUID, UUID, str]:
     arguments = {
         "sku": SKU,
         "supplier_id": SUPPLIER,
-        "quantity": 250,
+        "quantity": quantity,
         "unit_cost_cents": UNIT_COST,
     }
     run_id = uuid4()
@@ -322,37 +402,56 @@ def _waiting(db: Session) -> tuple[UUID, UUID, str]:
             id=proposal_id,
             proposal_type="reorder",
             arguments=arguments,
-            estimated_impact={"extended_cost_cents": 250 * UNIT_COST},
+            estimated_impact={"extended_cost_cents": quantity * UNIT_COST},
             risk_level="low",
             status=ProposalStatus.PENDING_APPROVAL,
             created_at=STARTED,
         ),
     )
-    store.add_approval(
-        NORTHWIND,
-        run_id,
-        proposal_id,
-        ApprovalCreate(
-            id=uuid4(),
-            arguments=arguments,
-            required_role=ApprovalRole.PROCUREMENT_MANAGER,
-            status=ApprovalStatus.PENDING,
-            expires_at=STARTED + APPROVAL_TTL,
-        ),
-    )
+    for role in roles:
+        store.add_approval(
+            NORTHWIND,
+            run_id,
+            proposal_id,
+            ApprovalCreate(
+                id=uuid4(),
+                arguments=arguments,
+                required_role=role,
+                status=ApprovalStatus.PENDING,
+                expires_at=STARTED + APPROVAL_TTL,
+            ),
+        )
     return proposal_id, run_id, canonical_json_hash(arguments)
 
 
-def _decide(db: Session, proposal_id: UUID, decision: str) -> None:
-    approval = _approval(db, proposal_id)
+def _decide(
+    db: Session,
+    proposal_id: UUID,
+    decision: str,
+    role: ApprovalRole = ApprovalRole.PROCUREMENT_MANAGER,
+) -> None:
+    approval = db.scalar(
+        select(Approval).where(
+            Approval.proposal_id == proposal_id,
+            Approval.required_role == role.value,
+        )
+    )
+    assert approval is not None
     ApprovalService(db).decide(
         NORTHWIND,
         approval.id,
-        Actor("manager@northwind.example", frozenset({ApprovalRole.PROCUREMENT_MANAGER.value})),
+        Actor(f"{role.value}@northwind.example", frozenset({role.value})),
         decision=decision,
         comment=None,
         now=STARTED,
     )
+
+
+def _wait(db: Session, proposal_id: UUID) -> ApprovalProcess:
+    row = db.scalar(select(ApprovalProcess).where(ApprovalProcess.proposal_id == proposal_id))
+    assert row is not None
+    db.refresh(row)
+    return row
 
 
 def _approve(arguments_hash: str) -> ProcessSignal:

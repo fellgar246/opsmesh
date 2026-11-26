@@ -24,6 +24,7 @@ from opsmesh_api.workflows.models import (
     ApprovalStatus,
     AuditRecord,
     OperationalProposal,
+    ProcessSignalKind,
     ProposalStatus,
     WorkflowRun,
 )
@@ -258,15 +259,22 @@ class ApprovalService:
     def __init__(self, db: Session) -> None:
         self._db = db
 
-    def list_approvals(self, tenant_id: str) -> ApprovalQueue:
+    def list_approvals(self, tenant_id: str, now: datetime | None = None) -> ApprovalQueue:
         self._require_tenant(tenant_id)
+        self._expire_due(tenant_id, now or datetime.now(UTC))
         rows = self._joined(tenant_id)
         return ApprovalQueue(
             approvals=[_view(approval, proposal, run) for approval, proposal, run in rows]
         )
 
-    def get_approval(self, tenant_id: str, approval_id: UUID) -> ApprovalDetail:
+    def get_approval(
+        self,
+        tenant_id: str,
+        approval_id: UUID,
+        now: datetime | None = None,
+    ) -> ApprovalDetail:
         self._require_tenant(tenant_id)
+        self._expire_due(tenant_id, now or datetime.now(UTC))
         found = self._one(tenant_id, approval_id)
         if found is None:
             raise NotFoundError()
@@ -312,6 +320,7 @@ class ApprovalService:
                 f"Requires {approval.required_role} role.",
             )
         if approval.expires_at <= moment:
+            self._signal_wait(proposal, ProcessSignalKind.TIMEOUT, moment)
             approval.status = ApprovalStatus.EXPIRED.value
             self._db.commit()
             publish_ready(self._db)
@@ -367,7 +376,42 @@ class ApprovalService:
         self._sync_proposal(proposal)
         self._db.commit()
         publish_ready(self._db)
-        return self.get_approval(tenant_id, approval_id)
+        kind = ProcessSignalKind.APPROVE if decision == "approve" else ProcessSignalKind.REJECT
+        self._signal_wait(proposal, kind, moment)
+        return self.get_approval(tenant_id, approval_id, moment)
+
+    def _signal_wait(
+        self,
+        proposal: OperationalProposal,
+        kind: ProcessSignalKind,
+        moment: datetime,
+    ) -> None:
+        """Hand the decision to the approval wait. An older proposal opens its wait here."""
+
+        from opsmesh_api.workflows.approval_machine import ProcessSignal, runner_for
+
+        wait = runner_for(self._db)
+        wait.start(proposal.tenant_id, proposal.id)
+        signal = ProcessSignal(kind, canonical_json_hash(proposal.arguments))
+        wait.signal(proposal.tenant_id, proposal.id, signal, moment)
+
+    def _expire_due(self, tenant_id: str, moment: datetime) -> None:
+        """The local profile has no timer, so reading the queue delivers the timeout."""
+
+        due = self._db.scalars(
+            select(OperationalProposal)
+            .join(Approval, Approval.proposal_id == OperationalProposal.id)
+            .where(
+                Approval.tenant_id == tenant_id,
+                OperationalProposal.tenant_id == tenant_id,
+                Approval.status == ApprovalStatus.PENDING.value,
+                Approval.expires_at <= moment,
+                OperationalProposal.status == ProposalStatus.PENDING_APPROVAL.value,
+            )
+            .distinct()
+        ).all()
+        for proposal in due:
+            self._signal_wait(proposal, ProcessSignalKind.TIMEOUT, moment)
 
     def _sync_proposal(self, proposal: OperationalProposal) -> None:
         needed = required_roles(proposal_extended_cost(proposal))

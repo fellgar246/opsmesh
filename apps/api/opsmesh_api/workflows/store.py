@@ -245,6 +245,10 @@ class WorkflowStore:
         )
         record_approval_requested(self._db, row, run_id, datetime.now(UTC))
         self._insert(row)
+        # The approval machine imports the approval engine, which the operations engine shares.
+        from opsmesh_api.workflows.approval_machine import runner_for
+
+        runner_for(self._db).start(tenant_id, proposal_id)
         return self._approval_read(row)
 
     def add_tool_execution(
