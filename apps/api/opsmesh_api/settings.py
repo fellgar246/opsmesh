@@ -34,45 +34,10 @@ class Settings(BaseSettings):
     agentic_features_enabled: bool = False
     multi_agent_execution_enabled: bool = False
     cloud_agent_runtime_enabled: bool = False
-    # Blank selects no remote specialist. Names follow the conversion order.
-    remote_runtime_agents: str = ""
-    agent_runtime_endpoints: str = ""
-    agent_runtime_identities: str = ""
-    agent_runtime_qualifier: str = "DEFAULT"
-    cloud_tool_gateway_enabled: bool = False
-    tool_gateway_endpoint: str = ""
-    # agent=identity pairs. Empty uses opsmesh/<agent> for each specialist.
-    tool_gateway_identities: str = ""
-    tool_gateway_protocol_version: str = "2026-07-28"
-    cloud_policy_enabled: bool = False
-    policy_engine_id: str = ""
-    cloud_event_bus_enabled: bool = False
-    event_bus_name: str = ""
-    event_queue_url: str = ""
-    # The approval wait uses Step Functions only when the master switch is also on.
-    cloud_state_machine_enabled: bool = False
-    state_machine_arn: str = ""
-    # fixture is the local simulator. demandpilot calls an external forecast API.
-    forecast_provider: Literal["fixture", "demandpilot"] = "fixture"
-    demandpilot_base_url: str = ""
-    demandpilot_api_token: str = ""
-    demandpilot_timeout_seconds: float = 5.0
-    # local=external pairs. Tenant ids are never sent unless they appear here.
-    demandpilot_tenant_map: str = ""
-    # Blank disables cache fallback. A number is the freshness window in seconds.
-    demandpilot_freshness_seconds: str = ""
     managed_retrieval_enabled: bool = False
-    # Ingests the same fixtures after the local scorer. It does not score.
-    hosted_evaluation_enabled: bool = False
     long_term_memory_enabled: bool = False
     automatic_schedules_enabled: bool = False
     database_url: str = "postgresql+psycopg://opsmesh:opsmesh@localhost:5433/opsmesh"
-    cognito_user_pool_id: str = ""
-    cognito_region: str = "us-east-1"
-    cognito_client_id: str = ""
-    # Empty keeps tenant admin inside one tenant. A separate name is cross-tenant.
-    platform_role: str = ""
-    local_identity_secret: str = "opsmesh-local-development-identity"
 
     @property
     def effective_execution_profile(self) -> ExecutionProfile:
@@ -83,12 +48,6 @@ class Settings(BaseSettings):
     @property
     def local_deterministic_simulation(self) -> bool:
         return not self.aws_agentic_features_enabled
-
-    @property
-    def uses_local_identity(self) -> bool:
-        """The local profile signs tokens itself. Other profiles use Cognito."""
-
-        return self.effective_execution_profile == "local"
 
     def cloud_capability(self, requested: bool) -> bool:
         """Return whether a cloud capability is actually on.

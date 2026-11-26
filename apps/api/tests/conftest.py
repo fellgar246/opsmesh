@@ -11,7 +11,6 @@ from opsmesh_api.settings import Settings, get_settings
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
-from tests.auth_tokens import token_for
 
 
 @pytest.fixture
@@ -49,8 +48,4 @@ def client(session_factory: sessionmaker[Session]) -> Iterator[TestClient]:
     app.dependency_overrides[get_db] = override_db
     app.dependency_overrides[get_settings] = lambda: Settings(_env_file=None)
     with TestClient(app) as test_client:
-        test_client.headers["Authorization"] = (
-            "Bearer "
-            + token_for("analyst@northwind.example", "operations_analyst")
-        )
         yield test_client

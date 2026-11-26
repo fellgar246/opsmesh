@@ -1,30 +1,14 @@
 import { apiBaseUrl } from "./identity";
-import type {
-  ApprovalDetail,
-  ApprovalItem,
-  AuditEvent,
-  CostReport,
-  EvaluationLatest,
-  ReorderResponse,
-  Tenant,
-  WorkflowRun,
-} from "./types";
+import type { ReorderResponse, Tenant, WorkflowRun } from "./types";
 
 export class ApiError extends Error {
   status: number;
-  code: string;
   fieldErrors: Record<string, string>;
 
-  constructor(
-    status: number,
-    message: string,
-    fieldErrors: Record<string, string> = {},
-    code = "",
-  ) {
+  constructor(status: number, message: string, fieldErrors: Record<string, string> = {}) {
     super(message);
     this.name = "ApiError";
     this.status = status;
-    this.code = code;
     this.fieldErrors = fieldErrors;
   }
 }
@@ -62,10 +46,6 @@ export function parseApiError(status: number, body: unknown): ApiError {
   if (typeof detail === "string" && detail.length > 0) {
     return new ApiError(status, detail);
   }
-  if (isRecord(detail) && typeof detail.message === "string") {
-    const code = typeof detail.code === "string" ? detail.code : "";
-    return new ApiError(status, detail.message, {}, code);
-  }
   if (status === 404) return new ApiError(status, "Not found");
   return new ApiError(status, "The request failed.");
 }
@@ -81,7 +61,6 @@ export async function apiRequest<T>(path: string, init?: RequestInit): Promise<T
       ...init,
       headers: {
         accept: "application/json",
-        ...authHeader(),
         ...(init?.body ? { "content-type": "application/json" } : {}),
         ...init?.headers,
       },
@@ -101,32 +80,6 @@ export async function apiRequest<T>(path: string, init?: RequestInit): Promise<T
   return (await response.json()) as T;
 }
 
-let accessToken = "";
-
-export function setAccessToken(token: string): void {
-  accessToken = token;
-}
-
-function authHeader(): Record<string, string> {
-  if (!accessToken) return {};
-  return { authorization: `Bearer ${accessToken}` };
-}
-
-export type LocalSession = {
-  access_token: string;
-  token_type: string;
-  user_id: string;
-  tenant_id: string;
-  roles: string[];
-};
-
-export function openLocalSession(tenantId: string, role: string): Promise<LocalSession> {
-  return apiRequest("/auth/session", {
-    method: "POST",
-    body: JSON.stringify({ tenant_id: tenantId, role }),
-  });
-}
-
 export function tenantPath(tenantId: string, path: string): string {
   return `/tenants/${encodeURIComponent(tenantId)}${path}`;
 }
@@ -141,33 +94,6 @@ export function listWorkflows(tenantId: string): Promise<{ workflow_runs: Workfl
 
 export function getWorkflow(tenantId: string, runId: string): Promise<WorkflowRun> {
   return apiRequest(tenantPath(tenantId, `/workflow-runs/${runId}`));
-}
-
-export function listAuditEvents(
-  tenantId: string,
-  workflowId?: string,
-): Promise<{ events: AuditEvent[] }> {
-  const query = workflowId ? `?workflow_id=${encodeURIComponent(workflowId)}` : "";
-  return apiRequest(tenantPath(tenantId, `/audit-events${query}`));
-}
-
-export function listApprovals(tenantId: string): Promise<{ approvals: ApprovalItem[] }> {
-  return apiRequest(tenantPath(tenantId, "/approvals"));
-}
-
-export function getApproval(tenantId: string, approvalId: string): Promise<ApprovalDetail> {
-  return apiRequest(tenantPath(tenantId, `/approvals/${approvalId}`));
-}
-
-export function decideApproval(
-  tenantId: string,
-  approvalId: string,
-  body: { decision: "approve" | "reject"; comment?: string },
-): Promise<ApprovalDetail> {
-  return apiRequest(tenantPath(tenantId, `/approvals/${approvalId}/decision`), {
-    method: "POST",
-    body: JSON.stringify(body),
-  });
 }
 
 export function startReorder(
@@ -201,12 +127,4 @@ export function startBudgetPlan(
     method: "POST",
     body: JSON.stringify(body),
   });
-}
-
-export function getCost(tenantId: string): Promise<CostReport> {
-  return apiRequest(tenantPath(tenantId, "/cost"));
-}
-
-export function getLatestEvaluation(tenantId: string): Promise<EvaluationLatest> {
-  return apiRequest(tenantPath(tenantId, "/evaluations/latest"));
 }

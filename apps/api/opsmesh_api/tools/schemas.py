@@ -1,16 +1,9 @@
-"""Argument models for tools. The task tenant is authoritative."""
+"""Argument models for read-only tools. The task tenant is authoritative."""
 
 from datetime import date
 from typing import Literal
-from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
-
-from opsmesh_api.workflows.hashing import canonical_json_hash
-
-CREATE_DRAFT_TOOL = "procurement.create_draft_purchase_order"
-SUBMIT_FOR_APPROVAL_TOOL = "procurement.submit_purchase_order_for_approval"
-WRITE_TOOL_NAMES = frozenset({CREATE_DRAFT_TOOL, SUBMIT_FOR_APPROVAL_TOOL})
 
 
 class ToolArgs(BaseModel):
@@ -68,27 +61,3 @@ class ApprovalRequirementArgs(ToolArgs):
 
 class SupplierRestrictionArgs(ToolArgs):
     supplier_status: Literal["approved", "unapproved"]
-
-
-class DraftPurchaseOrderArgs(ToolArgs):
-    """Commercial arguments that must match a feasible proposal."""
-
-    proposal_id: UUID
-    sku: str = Field(min_length=1)
-    supplier_id: str = Field(min_length=1)
-    quantity: int = Field(ge=1)
-    unit_cost_cents: int = Field(ge=0)
-    idempotency_key: str = Field(min_length=1, max_length=200)
-
-
-class SubmitPurchaseOrderArgs(ToolArgs):
-    """Identify one local draft and the key for a safe replay."""
-
-    purchase_order_id: str = Field(min_length=1)
-    idempotency_key: str = Field(min_length=1, max_length=200)
-
-
-def validated_arguments_hash(model: BaseModel) -> str:
-    """Hash of the validated arguments. Null optional fields are omitted."""
-
-    return canonical_json_hash(model.model_dump(mode="json", exclude_none=True))

@@ -31,7 +31,7 @@ from opsmesh_api.agents.planner import (
     WorkflowKind,
 )
 from opsmesh_api.agents.planner import PlanCandidate as PlannerCandidate
-from opsmesh_api.agents.routing import FlaggedPlanner, select_planner
+from opsmesh_api.agents.routing import select_planner
 from opsmesh_api.operations.engine import OperationalEngine
 from opsmesh_api.operations.schemas import ReorderRequest
 from opsmesh_api.settings import Settings
@@ -382,7 +382,7 @@ def test_local_profile_selects_the_deterministic_planner() -> None:
         model_provider_enabled=True,
     )
     selected = select_planner(on, model=FixtureModel(["{}"]))
-    assert isinstance(selected, FlaggedPlanner)
+    assert isinstance(selected, ModelSupervisorPlanner)
     signature = inspect.signature(ModelSupervisorPlanner.__init__)
     assert list(signature.parameters) == ["self", "model", "model_id"]
 

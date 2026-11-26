@@ -41,10 +41,9 @@ from opsmesh_api.agents.coordinator import (
     _tool_calls,
 )
 from opsmesh_api.agents.plan_schema import SupervisorPlan
-from opsmesh_api.agents.skip import SKIP_REASON, SKIPPED_AGENTS, reorder_skip_reason
 from opsmesh_api.agents.transitions import UNSATISFIED, IllegalTransition, assert_transition
-from opsmesh_api.operations.policy import REASON_ADEQUATE_STOCK, REASON_MISSING_EVIDENCE
-from opsmesh_api.operations.quantity import ReorderMath, select_demand
+from opsmesh_api.operations.policy import REASON_MISSING_EVIDENCE
+from opsmesh_api.operations.quantity import ReorderMath
 from opsmesh_api.operations.schemas import ReorderRequest
 from opsmesh_api.operations.synthesis import (
     ConstraintOutcome,
@@ -56,7 +55,6 @@ from opsmesh_api.workflows.models import Confidence, TaskStatus, WorkflowStatus
 from opsmesh_api.workflows.schemas import WarningItem
 
 _RETRYABLE = frozenset({"task_timeout", "specialist_failed"})
-_TOKEN_LIMITS = frozenset({"input_token_ceiling", "output_token_ceiling"})
 
 
 @dataclass(frozen=True)
@@ -280,7 +278,6 @@ class PlanCoordinator:
             if self._past_deadline():
                 self._expire_workflow()
                 return
-            self._skip_proven()
             self._skip_blocked()
             self._launch()
             if self._closed:
@@ -332,8 +329,6 @@ class PlanCoordinator:
         current = {task.id: task for task in self._journal.tasks()}
         for task in current.values():
             if task.id in self._inflight_ids:
-                continue
-            if self._wait_for_stock(task, current):
                 continue
             if task.status == TaskStatus.READY:
                 return task
@@ -469,10 +464,6 @@ class PlanCoordinator:
             self._fail_attempt(item.task_id, "specialist_failed", None)
             return
         self._sync_counts()
-        limit = _token_limit(payload)
-        if limit is not None:
-            self._stop_for_limit(item.task_id, limit, payload)
-            return
         recorded = self._recorded(item.task_id, payload)
         if recorded.decision_facts is None:
             self._failed_envelopes[item.task_id] = payload
@@ -563,9 +554,6 @@ class PlanCoordinator:
 
     def _conclude(self) -> None:
         tasks = self._journal.tasks()
-        if self._adequate_stock_settled(tasks):
-            self._finish_adequate()
-            return
         if any(task.status != TaskStatus.COMPLETED for task in tasks):
             self._math = None
             self._finish(WorkflowStatus.FAILED, REASON_MISSING_EVIDENCE)
@@ -611,107 +599,6 @@ class PlanCoordinator:
         if arguments is not None:
             self._context.proposals.append(arguments)
         self._finish(status, math.reason)
-
-    def _proven_reason(self) -> str | None:
-        if self._context is None or self._request is None:
-            return None
-        return reorder_skip_reason(
-            service_level=self._request.service_level,
-            inventory=self._context.facts.get(AgentType.INVENTORY.value),
-            demand=self._context.facts.get(AgentType.DEMAND.value),
-        )
-
-    def _skip_proven(self) -> None:
-        reason = self._proven_reason()
-        if reason is None:
-            return
-        for task in self._journal.tasks():
-            if task.agent in SKIPPED_AGENTS and task.status in {
-                TaskStatus.PENDING,
-                TaskStatus.READY,
-            }:
-                self._transition(task.id, TaskStatus.SKIPPED, reason)
-
-    def _wait_for_stock(self, task: TrackedTask, current: dict[UUID, TrackedTask]) -> bool:
-        """Hold supplier and finance until inventory and demand can prove a skip."""
-
-        if task.agent not in SKIPPED_AGENTS:
-            return False
-        inventory = _by_agent(current, AgentType.INVENTORY.value)
-        demand = _by_agent(current, AgentType.DEMAND.value)
-        if inventory is None or demand is None:
-            return False
-        if inventory.status in UNSATISFIED or demand.status in UNSATISFIED:
-            return False
-        return not (
-            inventory.status == TaskStatus.COMPLETED and demand.status == TaskStatus.COMPLETED
-        )
-
-    def _adequate_stock_settled(self, tasks: list[TrackedTask]) -> bool:
-        if self._proven_reason() != SKIP_REASON:
-            return False
-        by_agent = {task.agent: task for task in tasks}
-        for name in (AgentType.INVENTORY.value, AgentType.DEMAND.value):
-            task = by_agent.get(name)
-            if task is None or task.status != TaskStatus.COMPLETED:
-                return False
-        skipped = [task for task in tasks if task.agent in SKIPPED_AGENTS]
-        if not skipped or any(task.status != TaskStatus.SKIPPED for task in skipped):
-            return False
-        return all(task.status in {TaskStatus.COMPLETED, TaskStatus.SKIPPED} for task in tasks)
-
-    def _finish_adequate(self) -> None:
-        request = self._request
-        context = self._context
-        assert request is not None and context is not None
-        inventory = context.facts[AgentType.INVENTORY.value]
-        demand = context.facts[AgentType.DEMAND.value]
-        quantile, selected = select_demand(request.service_level, demand["p50"], demand["p90"])
-        available = inventory["available_units"]
-        math = ReorderMath(
-            selected_quantile=quantile,
-            selected_demand=selected,
-            gross_need=selected - available,
-            quantity=0,
-            unit_cost_cents=0,
-            extended_cost_cents=0,
-            reason=REASON_ADEQUATE_STOCK,
-            blocked=False,
-            requested_quantity=0,
-            binding_constraints=(),
-        )
-        outcome = ConstraintOutcome(
-            reason=REASON_ADEQUATE_STOCK,
-            quantity=0,
-            math=math,
-            binding_constraints=(),
-            requested_quantity=0,
-            recommendations=(),
-            requires_manager_approval=False,
-            requires_finance_approval=False,
-            evidence={},
-        )
-        self._math = math
-        self._outcome = outcome
-        self._explanation = render_explanation(outcome)
-        self._manager = False
-        self._finance = False
-        context.proposals.append(_adequate_arguments(request, math, outcome, self._explanation))
-        self._finish(WorkflowStatus.COMPLETED, REASON_ADEQUATE_STOCK)
-
-    def _stop_for_limit(
-        self,
-        task_id: UUID,
-        limit: str,
-        payload: AgentResultEnvelope,
-    ) -> None:
-        self._limit_reason = limit
-        if self._status(task_id) == TaskStatus.RUNNING:
-            self._transition(task_id, TaskStatus.FAILED, limit)
-        if task_id in self._settled:
-            return
-        self._journal.commit_failure(self._failure_run(task_id, limit, payload))
-        self._settled.add(task_id)
 
     def _ceiling_block(self, armed: int) -> str | None:
         if self._tool_calls + armed >= self._max_tool_calls:
@@ -833,46 +720,6 @@ class PlanCoordinator:
             context=self._context,
             explanation=self._explanation,
         )
-
-
-def _token_limit(payload: AgentResultEnvelope) -> str | None:
-    for warning in payload.warnings:
-        if warning.code in _TOKEN_LIMITS:
-            return warning.code
-    return None
-
-
-def _by_agent(current: dict[UUID, TrackedTask], agent: str) -> TrackedTask | None:
-    for task in current.values():
-        if task.agent == agent:
-            return task
-    return None
-
-
-def _adequate_arguments(
-    request: ReorderRequest,
-    math: ReorderMath,
-    outcome: ConstraintOutcome,
-    explanation: str,
-) -> dict[str, Any]:
-    return {
-        "sku": request.sku,
-        "region": request.region,
-        "service_level": request.service_level,
-        "selected_quantile": math.selected_quantile,
-        "selected_demand": math.selected_demand,
-        "gross_need": math.gross_need,
-        "quantity": 0,
-        "unit_cost_cents": 0,
-        "extended_cost_cents": 0,
-        "requires_manager_approval": False,
-        "requires_finance_approval": False,
-        "reason": math.reason,
-        "requested_quantity": 0,
-        "binding_constraints": [],
-        "recommendations": [item.as_dict() for item in outcome.recommendations],
-        "explanation": explanation,
-    }
 
 
 def _failure_message(reason: str) -> str:

@@ -1,4 +1,4 @@
-"""Tool port shared by the local registry and the tool gateway."""
+"""Tool port. A remote gateway can implement the same calls later."""
 
 from collections.abc import Callable
 from dataclasses import dataclass

@@ -41,8 +41,6 @@ class CostSummary(APIModel):
     latency_ms: int = Field(default=0, ge=0)
     estimated_cost_cents: int | None = Field(default=None, ge=0)
     supervisor_iterations: int = Field(default=0, ge=0)
-    input_tokens: int = Field(default=0, ge=0)
-    output_tokens: int = Field(default=0, ge=0)
 
 
 class WarningItem(APIModel):

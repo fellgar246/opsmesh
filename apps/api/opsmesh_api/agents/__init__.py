@@ -1,4 +1,4 @@
-"""Typed specialist contracts, local stubs, and the runtime adapter."""
+"""Typed specialist contracts, local stubs, and the model-backed adapter."""
 
 from opsmesh_api.agents.contracts import (
     SCHEMA_VERSION,

@@ -1,6 +1,6 @@
 """Run reorder, supplier-delay, and budget-plan workflows as ordinary code."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from time import perf_counter
 from typing import Any
 from uuid import UUID, uuid4
@@ -24,10 +24,6 @@ from opsmesh_api.agents.planner import (
 )
 from opsmesh_api.agents.planner import PlanCandidate as PlannerCandidate
 from opsmesh_api.agents.stubs import StubAgentClient
-from opsmesh_api.approvals.engine import APPROVAL_TTL as _APPROVAL_TTL
-from opsmesh_api.cost.pricing import estimate_cost_cents, usage_tokens
-from opsmesh_api.forecasts.fixture import FixtureForecastProvider
-from opsmesh_api.forecasts.port import DemandForecastProvider, ForecastReading
 from opsmesh_api.operations.policy import REASON_MISSING_EVIDENCE, approval_for_total
 from opsmesh_api.operations.quantity import select_demand
 from opsmesh_api.operations.risk import classify_stockout_risk, stockout_risk_score
@@ -46,6 +42,7 @@ from opsmesh_api.operations.schemas import (
 from opsmesh_api.operations.synthesis import synthesize
 from opsmesh_api.services.errors import NotFoundError
 from opsmesh_api.services.finance import FinanceService
+from opsmesh_api.services.forecast import ForecastService
 from opsmesh_api.services.inventory import InventoryService
 from opsmesh_api.services.models import Tenant
 from opsmesh_api.services.supplier import SupplierService
@@ -72,6 +69,7 @@ from opsmesh_api.workflows.store import WorkflowStore
 
 # Delay impact has no analyst service level, so the selected forecast is P50.
 _DELAY_SERVICE_LEVEL = 0.50
+_APPROVAL_TTL = timedelta(days=7)
 
 
 class OperationalEngine:
@@ -82,24 +80,15 @@ class OperationalEngine:
         db: Session,
         agent_client: AgentClient | None = None,
         planner: SupervisorPlanner | None = None,
-        forecast_provider: DemandForecastProvider | None = None,
     ) -> None:
         self._db = db
         self._inventory = InventoryService(db)
-        self._forecast = (
-            forecast_provider if forecast_provider is not None else FixtureForecastProvider(db)
-        )
+        self._forecast = ForecastService(db)
         self._supplier = SupplierService(db)
         self._finance = FinanceService(db)
         self._store = WorkflowStore(db)
         self._agent_client = agent_client
         self._planner = planner if planner is not None else DeterministicPlanner()
-
-    def started_today(self, tenant_id: str) -> int:
-        """Workflows this tenant has already started on the current UTC day."""
-
-        self._require_tenant(tenant_id)
-        return self._store.count_started_today(tenant_id)
 
     def reorder(self, tenant_id: str, body: ReorderRequest) -> ReorderRead:
         self._require_tenant(tenant_id)
@@ -136,7 +125,7 @@ class OperationalEngine:
                 reason=error.code,
                 cost_summary=_planner_cost(self._planner, _latency(timer)),
             )
-        client = self._agent_client or StubAgentClient(self._db, forecast_provider=self._forecast)
+        client = self._agent_client or StubAgentClient(self._db)
         task_ids = self._seed_reorder(tenant_id, run_id, body, started, plan)
         journal = StoreJournal(self._store, tenant_id, run_id, plan, task_ids)
         outcome = PlanCoordinator(client, journal).run(
@@ -146,7 +135,17 @@ class OperationalEngine:
             plan=plan,
         )
         latency_ms = _latency(timer)
-        risk = _reorder_risk(outcome)
+        risk = RiskLevel.HIGH
+        if outcome.math is not None and outcome.context is not None:
+            inventory = outcome.context.facts["inventory"]
+            supplier = outcome.context.facts["supplier"]
+            score = stockout_risk_score(
+                inventory["available_units"],
+                supplier["lead_time_days"],
+                outcome.math.selected_demand,
+                FORECAST_HORIZON_DAYS,
+            )
+            risk = classify_stockout_risk(score) if outcome.math.quantity > 0 else RiskLevel.LOW
         arguments = None
         if outcome.context is not None and outcome.context.proposals:
             arguments = outcome.context.proposals[0]
@@ -157,7 +156,6 @@ class OperationalEngine:
             latency_ms=latency_ms,
             proposal_arguments=arguments,
             risk_level=risk,
-            client=client,
         )
         math = outcome.math
         return ReorderRead(
@@ -180,8 +178,6 @@ class OperationalEngine:
                 latency_ms,
                 outcome.model_calls + self._planner.model_calls,
                 self._planner.iterations,
-                client=client,
-                planner=self._planner,
             ),
         )
 
@@ -245,7 +241,6 @@ class OperationalEngine:
         latency_ms: int,
         proposal_arguments: dict[str, Any] | None,
         risk_level: RiskLevel,
-        client: AgentClient | None = None,
     ) -> None:
         finished = datetime.now(UTC)
         summary = _cost(
@@ -253,8 +248,6 @@ class OperationalEngine:
             latency_ms,
             outcome.model_calls + self._planner.model_calls,
             self._planner.iterations,
-            client=client,
-            planner=self._planner,
         )
         self._store.update_run(
             tenant_id,
@@ -389,14 +382,21 @@ class OperationalEngine:
                 )
                 try:
                     calls += 1
-                    forecast = self._forecast.read(
+                    forecast = self._forecast.get_forecast(
                         tenant_id, snapshot.sku, snapshot.region, FORECAST_HORIZON_DAYS
                     )
                 except NotFoundError:
                     return self._failed_delay(
                         tenant_id, body, delay.delay_id, started, timer, calls, facts, plan
                     )
-                facts.append(_forecast_fact(forecast))
+                facts.append(
+                    _from_model(
+                        "demand",
+                        "forecast",
+                        f"{snapshot.sku}:{snapshot.region}:{FORECAST_HORIZON_DAYS}",
+                        forecast,
+                    )
+                )
                 calls += 1
                 terms = self._supplier.get_terms(tenant_id, body.supplier_id, snapshot.sku)
                 # The delay pushes receipt out, so lead time includes delay days.
@@ -511,10 +511,17 @@ class OperationalEngine:
                     )
                 )
                 calls += 1
-                forecast = self._forecast.read(
+                forecast = self._forecast.get_forecast(
                     tenant_id, candidate.sku, candidate.region, FORECAST_HORIZON_DAYS
                 )
-                facts.append(_forecast_fact(forecast))
+                facts.append(
+                    _from_model(
+                        "demand",
+                        "forecast",
+                        f"{candidate.sku}:{candidate.region}:{FORECAST_HORIZON_DAYS}",
+                        forecast,
+                    )
+                )
                 calls += 1
                 preferred = self._supplier.get_preferred(tenant_id, candidate.sku)
                 calls += 1
@@ -856,7 +863,7 @@ class OperationalEngine:
             evidence_items = [
                 ResultEvidenceItem(
                     type=fact.evidence_type,
-                    source=fact.evidence_source,
+                    source=fact.agent_type,
                     source_record_id=fact.source_record_id,
                     observed_at=fact.observed_at,
                 )
@@ -886,7 +893,7 @@ class OperationalEngine:
                 EvidenceCreate(
                     id=uuid4(),
                     type=fact.evidence_type,
-                    source=fact.evidence_source,
+                    source=fact.agent_type,
                     source_record_id=fact.source_record_id,
                     observed_at=fact.observed_at,
                     checksum=fact.checksum,
@@ -951,7 +958,6 @@ class _Fact:
         payload: dict[str, Any],
         observed_at: datetime,
         checksum: str,
-        evidence_source: str | None = None,
     ) -> None:
         self.agent_type = agent_type
         self.evidence_type = evidence_type
@@ -959,28 +965,9 @@ class _Fact:
         self.payload = payload
         self.observed_at = observed_at
         self.checksum = checksum
-        self.evidence_source = evidence_source or agent_type
 
 
-def _forecast_fact(reading: ForecastReading) -> _Fact:
-    """Cite the provider and source record that produced the quantiles."""
-
-    return _from_model(
-        "demand",
-        "forecast",
-        reading.source_record_id,
-        reading,
-        evidence_source=reading.provider,
-    )
-
-
-def _from_model(
-    agent_type: str,
-    evidence_type: str,
-    source_record_id: str,
-    model: Any,
-    evidence_source: str | None = None,
-) -> _Fact:
+def _from_model(agent_type: str, evidence_type: str, source_record_id: str, model: Any) -> _Fact:
     from opsmesh_api.workflows.hashing import canonical_json_hash
 
     payload = model.model_dump(mode="json")
@@ -996,7 +983,6 @@ def _from_model(
         payload,
         stamp,
         canonical_json_hash(payload),
-        evidence_source,
     )
 
 
@@ -1019,49 +1005,18 @@ def _computed(
     )
 
 
-def _reorder_risk(outcome: ReorderCoordination) -> RiskLevel:
-    if outcome.math is not None and outcome.math.quantity == 0:
-        return RiskLevel.LOW
-    if outcome.math is None or outcome.context is None:
-        return RiskLevel.HIGH
-    inventory = outcome.context.facts.get("inventory")
-    supplier = outcome.context.facts.get("supplier")
-    if not isinstance(inventory, dict) or not isinstance(supplier, dict):
-        return RiskLevel.HIGH
-    score = stockout_risk_score(
-        inventory["available_units"],
-        supplier["lead_time_days"],
-        outcome.math.selected_demand,
-        FORECAST_HORIZON_DAYS,
-    )
-    return classify_stockout_risk(score)
-
-
 def _cost(
     tool_calls: int,
     latency_ms: int,
     model_calls: int = 0,
     supervisor_iterations: int = 0,
-    *,
-    client: object | None = None,
-    planner: object | None = None,
 ) -> CostSummary:
-    client_in, client_out, client_unpriced, client_model = usage_tokens(client)
-    planner_in, planner_out, planner_unpriced, planner_model = usage_tokens(planner)
     return CostSummary(
         model_calls=model_calls,
         tool_calls=tool_calls,
         latency_ms=latency_ms,
-        estimated_cost_cents=estimate_cost_cents(
-            model_calls=model_calls,
-            input_tokens=client_in + planner_in,
-            output_tokens=client_out + planner_out,
-            model_id=client_model or planner_model,
-            unpriced=client_unpriced or planner_unpriced,
-        ),
+        estimated_cost_cents=0,
         supervisor_iterations=supervisor_iterations,
-        input_tokens=client_in + planner_in,
-        output_tokens=client_out + planner_out,
     )
 
 
@@ -1070,13 +1025,7 @@ def _planner_cost(
     latency_ms: int,
     tool_calls: int = 0,
 ) -> CostSummary:
-    return _cost(
-        tool_calls,
-        latency_ms,
-        planner.model_calls,
-        planner.iterations,
-        planner=planner,
-    )
+    return _cost(tool_calls, latency_ms, planner.model_calls, planner.iterations)
 
 
 def _ordered_names(names: list[str], plan: SupervisorPlan | None) -> list[str]:

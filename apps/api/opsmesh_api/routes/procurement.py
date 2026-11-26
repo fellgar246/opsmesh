@@ -7,15 +7,10 @@ from sqlalchemy.orm import Session
 
 from opsmesh_api.db import get_db
 from opsmesh_api.routes.errors import call
-from opsmesh_api.routes.security import bind_tenant
 from opsmesh_api.services.procurement import ProcurementService
 from opsmesh_api.services.schemas import PurchaseOrderList, PurchaseOrderRead
 
-router = APIRouter(
-    prefix="/tenants/{tenant_id}/procurement",
-    tags=["procurement"],
-    dependencies=[Depends(bind_tenant)],
-)
+router = APIRouter(prefix="/tenants/{tenant_id}/procurement", tags=["procurement"])
 
 
 def _service(db: Annotated[Session, Depends(get_db)]) -> ProcurementService:

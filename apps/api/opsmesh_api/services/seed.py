@@ -9,22 +9,11 @@ from sqlalchemy import delete
 from sqlalchemy.orm import Session
 
 from opsmesh_api.db import SessionLocal
-from opsmesh_api.evaluation.models import EvaluationRun
-from opsmesh_api.events.models import (
-    AnalyticsFact,
-    AuditProjection,
-    ConsumerReceipt,
-    EvaluationSample,
-    NotificationInbox,
-    OutboxRow,
-    ProposalEffect,
-)
 from opsmesh_api.logging import configure_logging
 from opsmesh_api.services.errors import FixtureError
 from opsmesh_api.services.models import (
     Budget,
     Forecast,
-    IdempotencyRecord,
     PurchaseOrder,
     SkuStock,
     StockoutEvent,
@@ -39,8 +28,6 @@ from opsmesh_api.workflows.models import (
     AgentResult,
     AgentTask,
     Approval,
-    ApprovalProcess,
-    AuditRecord,
     Evidence,
     OperationalProposal,
     ToolExecution,
@@ -53,25 +40,14 @@ _MONEY_KEYS = frozenset({"available_cents", "committed_cents", "unit_cost_cents"
 _SCORE_KEYS = frozenset({"quality", "reliability_score"})
 
 _CLEAR_ORDER = (
-    EvaluationRun,
-    ProposalEffect,
-    EvaluationSample,
-    AnalyticsFact,
-    NotificationInbox,
-    AuditProjection,
-    ConsumerReceipt,
-    OutboxRow,
     ToolExecution,
     AgentResult,
-    IdempotencyRecord,
-    PurchaseOrder,
-    AuditRecord,
-    ApprovalProcess,
     Approval,
     OperationalProposal,
     Evidence,
     AgentTask,
     WorkflowRun,
+    PurchaseOrder,
     SupplierDelay,
     SupplierTerms,
     StockoutEvent,

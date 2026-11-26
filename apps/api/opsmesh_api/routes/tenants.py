@@ -7,11 +7,10 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from opsmesh_api.db import get_db
-from opsmesh_api.routes.security import get_principal
 from opsmesh_api.services.models import Tenant
 from opsmesh_api.services.schemas import TenantList, TenantRead
 
-router = APIRouter(prefix="/tenants", tags=["tenants"], dependencies=[Depends(get_principal)])
+router = APIRouter(prefix="/tenants", tags=["tenants"])
 
 
 @router.get("", response_model=TenantList)

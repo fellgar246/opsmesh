@@ -4,9 +4,8 @@ from collections.abc import Callable
 
 from fastapi import HTTPException
 
-from opsmesh_api.approvals.errors import ApprovalError
 from opsmesh_api.services.errors import NotFoundError, StockConflictError
-from opsmesh_api.workflows.errors import DailyLimitError, PersistenceRejected, WorkflowNotFound
+from opsmesh_api.workflows.errors import PersistenceRejected, WorkflowNotFound
 
 
 def call[T](fn: Callable[[], T]) -> T:
@@ -27,13 +26,3 @@ def call[T](fn: Callable[[], T]) -> T:
         raise HTTPException(status_code=404, detail="Not found") from exc
     except PersistenceRejected as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    except ApprovalError as exc:
-        raise HTTPException(
-            status_code=exc.status_code,
-            detail={"code": exc.code, "message": exc.message, **exc.extra},
-        ) from exc
-    except DailyLimitError as exc:
-        raise HTTPException(
-            status_code=429,
-            detail={"code": exc.code, "message": exc.message},
-        ) from exc

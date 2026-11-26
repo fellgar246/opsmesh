@@ -23,21 +23,6 @@ FLAG_NAMES = (
     "AGENTIC_FEATURES_ENABLED",
     "MULTI_AGENT_EXECUTION_ENABLED",
     "CLOUD_AGENT_RUNTIME_ENABLED",
-    "REMOTE_RUNTIME_AGENTS",
-    "AGENT_RUNTIME_ENDPOINTS",
-    "AGENT_RUNTIME_IDENTITIES",
-    "AGENT_RUNTIME_QUALIFIER",
-    "CLOUD_TOOL_GATEWAY_ENABLED",
-    "TOOL_GATEWAY_ENDPOINT",
-    "TOOL_GATEWAY_IDENTITIES",
-    "TOOL_GATEWAY_PROTOCOL_VERSION",
-    "CLOUD_POLICY_ENABLED",
-    "POLICY_ENGINE_ID",
-    "CLOUD_EVENT_BUS_ENABLED",
-    "EVENT_BUS_NAME",
-    "EVENT_QUEUE_URL",
-    "CLOUD_STATE_MACHINE_ENABLED",
-    "STATE_MACHINE_ARN",
     "MANAGED_RETRIEVAL_ENABLED",
     "LONG_TERM_MEMORY_ENABLED",
     "AUTOMATIC_SCHEDULES_ENABLED",
@@ -65,8 +50,6 @@ def test_example_environment_documents_every_flag() -> None:
     assert "MANAGED_RETRIEVAL_ENABLED=false" in example
     assert "LONG_TERM_MEMORY_ENABLED=false" in example
     assert "AUTOMATIC_SCHEDULES_ENABLED=false" in example
-    assert "CLOUD_POLICY_ENABLED=false" in example
-    assert "CLOUD_STATE_MACHINE_ENABLED=false" in example
 
 
 def test_gitignore_ignores_secret_files() -> None:
@@ -84,14 +67,9 @@ def test_defaults_select_local_simulation(monkeypatch: pytest.MonkeyPatch) -> No
     assert settings.cloud_capability(settings.cloud_integrations_enabled) is False
     assert settings.cloud_capability(settings.agent_runtime_enabled) is False
     assert settings.cloud_capability(settings.model_provider_enabled) is False
-    assert settings.cloud_event_bus_enabled is False
-    assert settings.cloud_policy_enabled is False
-    assert settings.policy_engine_id == ""
     assert settings.managed_retrieval_enabled is False
     assert settings.long_term_memory_enabled is False
     assert settings.automatic_schedules_enabled is False
-    assert settings.cloud_state_machine_enabled is False
-    assert settings.state_machine_arn == ""
 
 
 def test_master_switch_forces_cloud_features_off(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -101,21 +79,13 @@ def test_master_switch_forces_cloud_features_off(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setenv("AGENT_RUNTIME_ENABLED", "true")
     monkeypatch.setenv("MODEL_PROVIDER_ENABLED", "true")
     monkeypatch.setenv("CLOUD_AGENT_RUNTIME_ENABLED", "true")
-    monkeypatch.setenv("CLOUD_TOOL_GATEWAY_ENABLED", "true")
-    monkeypatch.setenv("CLOUD_EVENT_BUS_ENABLED", "true")
-    monkeypatch.setenv("CLOUD_POLICY_ENABLED", "true")
     monkeypatch.setenv("MANAGED_RETRIEVAL_ENABLED", "true")
-    monkeypatch.setenv("CLOUD_STATE_MACHINE_ENABLED", "true")
     settings = Settings(_env_file=None)
     assert settings.effective_execution_profile == "local"
     assert settings.local_deterministic_simulation is True
     assert settings.cloud_capability(True) is False
     assert settings.cloud_capability(settings.cloud_agent_runtime_enabled) is False
-    assert settings.cloud_capability(settings.cloud_tool_gateway_enabled) is False
-    assert settings.cloud_capability(settings.cloud_event_bus_enabled) is False
-    assert settings.cloud_capability(settings.cloud_policy_enabled) is False
     assert settings.cloud_capability(settings.managed_retrieval_enabled) is False
-    assert settings.cloud_capability(settings.cloud_state_machine_enabled) is False
 
 
 def test_health_uses_local_profile_without_cloud(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -169,18 +139,6 @@ def test_decision_records_cover_the_baseline() -> None:
         "0010-fanout-coordinator.md",
         "0011-constraint-synthesis.md",
         "0012-policy-retrieval.md",
-        "0013-specialist-runtime.md",
-        "0014-tool-gateway.md",
-        "0015-draft-procurement-writes.md",
-        "0016-approval-engine.md",
-        "0017-event-driven-operations.md",
-        "0018-identity-tenant-isolation.md",
-        "0019-managed-policy.md",
-        "0020-evaluation-suite.md",
-        "0021-cost-controls.md",
-        "0022-deployment-identity.md",
-        "0023-approval-state-machine.md",
-        "0024-forecast-provider.md",
     ]
     planning_markers = ("_ori" + "gen/", "spe" + "cs/")
     for name in records:

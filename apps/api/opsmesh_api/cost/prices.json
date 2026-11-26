@@ -1,6 +1,0 @@
-{
-  "anthropic.claude-3-haiku-20240307-v1:0": {
-    "input_usd_per_million": "0.25",
-    "output_usd_per_million": "1.25"
-  }
-}

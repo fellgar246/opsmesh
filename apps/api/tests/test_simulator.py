@@ -16,7 +16,6 @@ from opsmesh_api.services.seed import FIXTURE_PATH, load_fixtures, parse_fixture
 from pydantic import ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
-from tests.auth_tokens import bearer
 
 NORTHWIND = "northwind"
 CONTOSO = "contoso"
@@ -164,10 +163,7 @@ def test_cross_tenant_read_is_not_found(client: TestClient) -> None:
     assert order.status_code == 404
     assert "3700" not in order.text
 
-    own = client.get(
-        f"/tenants/{CONTOSO}/finance/budget",
-        headers=bearer("analyst@contoso.example", "operations_analyst", CONTOSO),
-    )
+    own = client.get(f"/tenants/{CONTOSO}/finance/budget")
     assert own.status_code == 200
     assert own.json()["available_cents"] == 80_000
     assert "4200000" not in own.text

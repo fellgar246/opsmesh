@@ -62,14 +62,6 @@ export const reasonLabels: Record<string, { label: string; tone: string; detail:
   },
 };
 
-export const approvalRoleLabels: Record<string, string> = {
-  viewer: "Viewer",
-  operations_analyst: "Operations analyst",
-  procurement_manager: "Procurement manager",
-  finance_approver: "Finance approver",
-  admin: "Admin",
-};
-
 export const roleLabels: Record<string, string> = {
   viewer: "Viewer",
   operations_analyst: "Operations analyst",
@@ -87,20 +79,6 @@ export const agentLabels: Record<string, string> = {
   supervisor: "Supervisor",
   procurement: "Procurement",
   rules: "Deterministic engine",
-};
-
-export const eventTypeLabels: Record<string, string> = {
-  WorkflowStarted: "Workflow started",
-  TaskDelegated: "Task delegated",
-  TaskCompleted: "Task completed",
-  TaskFailed: "Task failed",
-  ProposalCreated: "Proposal created",
-  ApprovalRequested: "Approval requested",
-  ApprovalGranted: "Approval granted",
-  ApprovalRejected: "Approval rejected",
-  DraftPOCreated: "Draft purchase order created",
-  WorkflowCompleted: "Workflow completed",
-  WorkflowFailed: "Workflow failed",
 };
 
 export const workflowTypeLabels: Record<string, string> = {

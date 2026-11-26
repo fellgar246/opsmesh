@@ -11,7 +11,7 @@ import { StatusBadge } from "@/components/status-badge";
 import { workflowOutcome, workflowTitle } from "@/components/workflow-detail";
 import { ApiError, listWorkflows, startBudgetPlan, startReorder, startSupplierDelay } from "@/lib/api";
 import { formatRelative } from "@/lib/format";
-import { workflowCeilings } from "@/lib/identity";
+import { localIdentity, workflowCeilings } from "@/lib/identity";
 import { workflowStatusLabels } from "@/lib/labels";
 import { useSession } from "@/lib/session";
 
@@ -24,8 +24,7 @@ const reorderSchema = z.object({
 type WorkflowKind = "reorder" | "supplier_delay" | "budget_plan";
 
 export function OperationsConsole() {
-  const { tenantId, actor, role } = useSession();
-  const canStart = role === "operations_analyst";
+  const { tenantId } = useSession();
   const router = useRouter();
   const queryClient = useQueryClient();
   const [kind, setKind] = useState<WorkflowKind>("reorder");
@@ -69,7 +68,7 @@ export function OperationsConsole() {
           throw new ApiError(422, Object.values(errors).join(" "), errors);
         }
         return startReorder(tenantId, {
-          requested_by: actor,
+          requested_by: localIdentity.requestedBy,
           sku: parsed.data.sku,
           region: parsed.data.region,
           service_level: parsed.data.serviceLevel,
@@ -80,7 +79,7 @@ export function OperationsConsole() {
           throw new ApiError(422, "Supplier is required.", { supplier_id: "Supplier is required." });
         }
         return startSupplierDelay(tenantId, {
-          requested_by: actor,
+          requested_by: localIdentity.requestedBy,
           supplier_id: supplierId.trim(),
         });
       }
@@ -95,7 +94,7 @@ export function OperationsConsole() {
         });
       }
       return startBudgetPlan(tenantId, {
-        requested_by: actor,
+        requested_by: localIdentity.requestedBy,
         candidates: [
           {
             sku: parsed.data.sku,
@@ -203,19 +202,10 @@ export function OperationsConsole() {
         <p className="text-[13px] text-muted">
           Workflows today {todayCount} / {workflowCeilings.workflowsPerDay}
         </p>
-        {!canStart ? (
-          <p className="text-[13px] text-muted">Requires operations_analyst role.</p>
-        ) : null}
         <button
           type="submit"
-          disabled={!canStart || limitReached || mutation.isPending}
-          title={
-            !canStart
-              ? "Requires operations_analyst role."
-              : limitReached
-                ? "Daily workflow limit reached. Resets at 00:00 UTC."
-                : undefined
-          }
+          disabled={limitReached || mutation.isPending}
+          title={limitReached ? "Daily workflow limit reached. Resets at 00:00 UTC." : undefined}
           className="h-9 rounded-md bg-accent px-4 text-accent-fg disabled:opacity-60"
         >
           {mutation.isPending ? "Run workflow" : "Run workflow"}

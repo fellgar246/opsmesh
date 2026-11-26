@@ -2,7 +2,6 @@
 
 from datetime import UTC, date, datetime, timedelta
 from enum import StrEnum
-from uuid import UUID
 
 from sqlalchemy import (
     CheckConstraint,
@@ -14,7 +13,6 @@ from sqlalchemy import (
     Index,
     String,
     UniqueConstraint,
-    Uuid,
 )
 from sqlalchemy.engine import Dialect
 from sqlalchemy.orm import Mapped, mapped_column
@@ -32,12 +30,6 @@ class PurchaseOrderStatus(StrEnum):
     OPEN = "open"
     RECEIVED = "received"
     CANCELLED = "cancelled"
-    DRAFT = "draft"
-    WAITING_APPROVAL = "waiting_approval"
-    SUBMITTED = "submitted"
-
-
-_PURCHASE_ORDER_STATUSES = ", ".join(f"'{item.value}'" for item in PurchaseOrderStatus)
 
 
 class Trend(StrEnum):
@@ -245,17 +237,8 @@ class PurchaseOrder(Base):
         ),
         CheckConstraint("quantity >= 1", name="ck_purchase_orders_quantity"),
         CheckConstraint(
-            f"status IN ({_PURCHASE_ORDER_STATUSES})",
+            "status IN ('open', 'received', 'cancelled')",
             name="ck_purchase_orders_status",
-        ),
-        CheckConstraint(
-            "unit_cost_cents IS NULL OR unit_cost_cents >= 0",
-            name="ck_purchase_orders_unit_cost",
-        ),
-        UniqueConstraint(
-            "tenant_id",
-            "idempotency_key",
-            name="uq_purchase_orders_idempotency",
         ),
         Index("ix_purchase_orders_tenant_id", "tenant_id"),
     )
@@ -267,28 +250,3 @@ class PurchaseOrder(Base):
     quantity: Mapped[int]
     status: Mapped[str] = mapped_column(String(32))
     expected_receipt_on: Mapped[date] = mapped_column(Date)
-    proposal_id: Mapped[UUID | None] = mapped_column(
-        Uuid(as_uuid=True),
-        ForeignKey("operational_proposals.id"),
-        nullable=True,
-    )
-    unit_cost_cents: Mapped[int | None] = mapped_column(nullable=True)
-    idempotency_key: Mapped[str | None] = mapped_column(String(200), nullable=True)
-    arguments_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
-
-
-class IdempotencyRecord(Base):
-    """One successful write key. A replay with the same arguments returns its result."""
-
-    __tablename__ = "idempotency_records"
-    __table_args__ = (
-        UniqueConstraint("tenant_id", "idempotency_key", name="uq_idempotency_tenant_key"),
-        Index("ix_idempotency_records_tenant", "tenant_id"),
-    )
-
-    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
-    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.tenant_id"))
-    idempotency_key: Mapped[str] = mapped_column(String(200))
-    tool_name: Mapped[str] = mapped_column(String(200))
-    arguments_hash: Mapped[str] = mapped_column(String(64))
-    result_reference: Mapped[str] = mapped_column(ForeignKey("purchase_orders.purchase_order_id"))

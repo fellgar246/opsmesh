@@ -1,12 +1,15 @@
-import { Suspense } from "react";
+"use client";
 
-import { EvaluationsConsole } from "@/components/evaluations";
-import { LoadingRows } from "@/components/states";
+import { InactiveState } from "@/components/states";
 
 export default function EvaluationsPage() {
   return (
-    <Suspense fallback={<LoadingRows />}>
-      <EvaluationsConsole />
-    </Suspense>
+    <div>
+      <h1 className="mb-4 text-xl font-semibold">Evaluations</h1>
+      <InactiveState
+        title="Evaluations are not available yet"
+        body="Evaluation runs are not enabled in this environment. Results appear after the first recorded evaluation."
+      />
+    </div>
   );
 }

@@ -1,13 +1,11 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
 import { Check, ChevronDown, Menu, X } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState, type ReactNode } from "react";
 
-import { listApprovals } from "@/lib/api";
-import { localIdentities, type LocalRole } from "@/lib/identity";
+import { localIdentity } from "@/lib/identity";
 import { useSession } from "@/lib/session";
 
 const operate = [
@@ -18,30 +16,17 @@ const operate = [
 ];
 
 const observe = [
-  { href: "/audit", label: "Audit" },
   { href: "/agents", label: "Agents" },
   { href: "/evaluations", label: "Evaluations" },
   { href: "/cost", label: "Cost" },
 ];
 
-function NavLinks({
-  onNavigate,
-  pendingCount,
-}: {
-  onNavigate?: () => void;
-  pendingCount: number;
-}) {
+function NavLinks({ onNavigate }: { onNavigate?: () => void }) {
   const pathname = usePathname();
   return (
     <div className="flex flex-1 flex-col gap-6 overflow-auto px-3 py-4">
-      <Section
-        title="Operate"
-        items={operate}
-        pathname={pathname}
-        onNavigate={onNavigate}
-        pendingCount={pendingCount}
-      />
-      <Section title="Observe" items={observe} pathname={pathname} onNavigate={onNavigate} pendingCount={0} />
+      <Section title="Operate" items={operate} pathname={pathname} onNavigate={onNavigate} />
+      <Section title="Observe" items={observe} pathname={pathname} onNavigate={onNavigate} />
     </div>
   );
 }
@@ -51,13 +36,11 @@ function Section({
   items,
   pathname,
   onNavigate,
-  pendingCount,
 }: {
   title: string;
   items: { href: string; label: string }[];
   pathname: string;
   onNavigate?: () => void;
-  pendingCount: number;
 }) {
   return (
     <div>
@@ -73,21 +56,13 @@ function Section({
                 href={item.href}
                 onClick={onNavigate}
                 aria-current={active ? "page" : undefined}
-                className={`flex h-8 w-full items-center rounded-md border-l-2 px-2 ${
+                className={`flex h-8 items-center rounded-md border-l-2 px-2 ${
                   active
                     ? "border-accent bg-selected text-ink"
                     : "border-transparent text-muted hover:bg-sunken"
                 }`}
               >
                 {item.label}
-                {item.href === "/approvals" && pendingCount > 0 ? (
-                  <span
-                    data-testid="approval-badge"
-                    className="ml-auto rounded bg-[var(--warning-bg)] px-1.5 text-[12px] text-[var(--warning-fg)] tabular"
-                  >
-                    {pendingCount}
-                  </span>
-                ) : null}
               </Link>
             </li>
           );
@@ -97,29 +72,10 @@ function Section({
   );
 }
 
-function decidableCount(
-  approvals: { status: string; required_role: string; arguments_hash: string; live_arguments_hash: string; expires_at: string }[],
-  role: string,
-): number {
-  const now = Date.now();
-  return approvals.filter(
-    (item) =>
-      item.status === "PENDING" &&
-      item.required_role === role &&
-      item.arguments_hash === item.live_arguments_hash &&
-      new Date(item.expires_at).getTime() > now,
-  ).length;
-}
-
 export function AppShell({ children }: { children: ReactNode }) {
-  const { tenantId, tenantName, tenants, setTenantId, role } = useSession();
+  const { tenantId, tenantName, tenants, setTenantId } = useSession();
   const [open, setOpen] = useState(false);
   const [menu, setMenu] = useState(false);
-  const approvals = useQuery({
-    queryKey: ["approvals", tenantId],
-    queryFn: () => listApprovals(tenantId),
-  });
-  const pendingCount = decidableCount(approvals.data?.approvals ?? [], role);
 
   return (
     <div className="min-h-screen bg-canvas text-ink">
@@ -131,14 +87,13 @@ export function AppShell({ children }: { children: ReactNode }) {
       </a>
       <div className="flex min-h-screen">
         <aside className="hidden w-60 shrink-0 flex-col border-r border-line bg-surface lg:flex">
-            <SidebarBody
+          <SidebarBody
             tenantName={tenantName}
             tenantId={tenantId}
             tenants={tenants}
             menu={menu}
             setMenu={setMenu}
             setTenantId={setTenantId}
-            pendingCount={pendingCount}
           />
         </aside>
         {open ? (
@@ -157,7 +112,6 @@ export function AppShell({ children }: { children: ReactNode }) {
                 menu={menu}
                 setMenu={setMenu}
                 setTenantId={setTenantId}
-                pendingCount={pendingCount}
                 onNavigate={() => setOpen(false)}
               />
             </aside>
@@ -191,7 +145,6 @@ function SidebarBody({
   menu,
   setMenu,
   setTenantId,
-  pendingCount,
   onNavigate,
 }: {
   tenantName: string;
@@ -200,10 +153,8 @@ function SidebarBody({
   menu: boolean;
   setMenu: (open: boolean) => void;
   setTenantId: (tenantId: string) => void;
-  pendingCount: number;
   onNavigate?: () => void;
 }) {
-  const { role, actor, roleLabel, setRole } = useSession();
   return (
     <>
       <div className="relative border-b border-line p-3">
@@ -248,30 +199,15 @@ function SidebarBody({
         ) : null}
       </div>
       <nav aria-label="Primary">
-        <NavLinks onNavigate={onNavigate} pendingCount={pendingCount} />
+        <NavLinks onNavigate={onNavigate} />
       </nav>
       <div className="mt-auto border-t border-line p-3 text-[12px] text-muted">
         <p className="inline-flex rounded bg-[var(--neutral-bg)] px-1.5 py-0.5 text-[var(--neutral-fg)]">
           Local simulation
         </p>
-        <label className="mt-3 block">
-          <span className="text-[12px] text-subtle">Session</span>
-          <select
-            data-testid="local-role"
-            className="mt-1 h-8 w-full rounded-md border border-line bg-surface px-2"
-            value={role}
-            onChange={(event) => setRole(event.target.value as LocalRole)}
-          >
-            {Object.entries(localIdentities).map(([value, identity]) => (
-              <option key={value} value={value}>
-                {identity.label}
-              </option>
-            ))}
-          </select>
-        </label>
         <p className="mt-2">
-          {actor}
-          <span className="text-subtle"> · {roleLabel}</span>
+          {localIdentity.displayName}
+          <span className="text-subtle"> · {localIdentity.roleLabel}</span>
         </p>
       </div>
       {onNavigate ? (

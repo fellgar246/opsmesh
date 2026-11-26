@@ -143,7 +143,4 @@ def _order(row: PurchaseOrder) -> PurchaseOrderRead:
         quantity=row.quantity,
         status=PurchaseOrderStatus(row.status),
         expected_receipt_on=row.expected_receipt_on,
-        proposal_id=None if row.proposal_id is None else str(row.proposal_id),
-        unit_cost_cents=row.unit_cost_cents,
-        idempotency_key=row.idempotency_key,
     )

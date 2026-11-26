@@ -31,7 +31,6 @@ from opsmesh_api.agents.plan_schema import (
     extract_json_object,
     validate_plan,
 )
-from opsmesh_api.cost.pricing import price_known
 
 SUPERVISOR_PROMPT_VERSION = "supervisor-planner-1"
 _REORDER_REASON = "Check inventory, demand, and supplier facts, then finance, then policy."
@@ -140,18 +139,10 @@ class ModelSupervisorPlanner:
         self._model_id = model_id
         self.iterations = 0
         self.model_calls = 0
-        self.input_tokens = 0
-        self.output_tokens = 0
-        self.unpriced_model = False
-        self.priced_model_id: str | None = None
 
     def plan(self, request: PlanningRequest) -> SupervisorPlan:
         self.iterations = 0
         self.model_calls = 0
-        self.input_tokens = 0
-        self.output_tokens = 0
-        self.unpriced_model = False
-        self.priced_model_id = None
         budget = IterationBudget()
         feedback = ""
         last_code = "invalid_plan"
@@ -166,19 +157,13 @@ class ModelSupervisorPlanner:
                     iterations=MAX_SUPERVISOR_ITERATIONS,
                 ) from None
             self.model_calls += 1
-            prepared = self._request(request, feedback)
-            self.input_tokens += estimate_tokens(prepared.system_prompt) + estimate_tokens(
-                prepared.user_prompt
-            )
-            self._note_model(prepared.model_id)
             try:
-                completion = self._model.complete(prepared)
+                completion = self._model.complete(self._request(request, feedback))
             except ModelProviderError as exc:
                 last_code = "model_provider"
                 last_message = exc.message
                 feedback = last_message
                 continue
-            self.output_tokens += completion.output_tokens
             if (
                 completion.output_tokens > OUTPUT_TOKEN_CEILING
                 or estimate_tokens(completion.text) > OUTPUT_TOKEN_CEILING
@@ -199,13 +184,6 @@ class ModelSupervisorPlanner:
                 last_code = exc.code
                 last_message = exc.message
                 feedback = f"{exc.code}: {exc.message}"
-
-    def _note_model(self, model_id: str) -> None:
-        if not price_known(model_id):
-            self.unpriced_model = True
-            return
-        if self.priced_model_id is None:
-            self.priced_model_id = model_id
 
     def _request(self, request: PlanningRequest, feedback: str) -> ModelCompletionRequest:
         user_payload: dict[str, Any] = {

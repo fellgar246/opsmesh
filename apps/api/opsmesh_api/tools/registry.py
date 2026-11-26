@@ -10,11 +10,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from opsmesh_api.agents.contracts import AgentType
-from opsmesh_api.identity.access import allow
-from opsmesh_api.policy.gate import denial_for, managed_decision, tool_request
-from opsmesh_api.policy.managed import ManagedPolicyAdapter
-from opsmesh_api.services.errors import NotFoundError, ProcurementWriteError, StockConflictError
-from opsmesh_api.tools.catalog import READ_TOOL_SPECS, WRITE_TOOL_SPECS, ToolSpec
+from opsmesh_api.services.errors import NotFoundError, StockConflictError
+from opsmesh_api.tools.catalog import READ_TOOL_SPECS, ToolSpec
 from opsmesh_api.tools.port import (
     HandlerResult,
     ToolCall,
@@ -24,7 +21,6 @@ from opsmesh_api.tools.port import (
     ToolResult,
     ToolTaskNotFound,
 )
-from opsmesh_api.tools.schemas import WRITE_TOOL_NAMES, validated_arguments_hash
 from opsmesh_api.workflows.hashing import canonical_json_hash
 from opsmesh_api.workflows.models import AgentTask, ToolExecution, ToolStatus
 from opsmesh_api.workflows.schemas import ToolExecutionCreate
@@ -32,47 +28,26 @@ from opsmesh_api.workflows.store import WorkflowStore
 
 _FORBIDDEN_KINDS = frozenset({"url", "sql", "shell"})
 _READ_KIND = "read"
-_WRITE_KIND = "write"
-_EXECUTOR = frozenset({AgentType.PROCUREMENT_EXECUTOR})
 
 
 class LocalToolRegistry:
     """In-process registry. Specialists depend on `ToolPort`, not on this class."""
 
-    def __init__(
-        self,
-        db: Session,
-        specs: Sequence[ToolSpec] | None = None,
-        *,
-        policy: ManagedPolicyAdapter | None = None,
-    ) -> None:
+    def __init__(self, db: Session, specs: Sequence[ToolSpec] | None = None) -> None:
         self._db = db
         self._store = WorkflowStore(db)
-        self._policy = policy
         self._specs: dict[str, ToolSpec] = {}
         self.handler_calls = 0
-        self._cache: dict[tuple[UUID, str, str, str], ToolResult] = {}
-        registered = tuple(READ_TOOL_SPECS) + tuple(WRITE_TOOL_SPECS) if specs is None else specs
-        for spec in registered:
+        self._cache: dict[tuple[UUID, str, str], ToolResult] = {}
+        for spec in READ_TOOL_SPECS if specs is None else specs:
             self._add(spec)
 
     def invoke(self, call: ToolCall) -> ToolResult:
         """Validate and authorize one call, then persist the invocation."""
 
-        stored = self._stored_task(call)
-        if stored is None:
+        task = self._task(call)
+        if task is None:
             raise ToolTaskNotFound(call.task_id)
-        if stored.tenant_id != call.tenant_id:
-            anchored = call.model_copy(update={"tenant_id": stored.tenant_id})
-            started = perf_counter()
-            return self._fail(
-                anchored,
-                started,
-                canonical_json_hash(call.arguments),
-                error_code="denied",
-                error_message="The tenant does not match the task.",
-            )
-        task = stored
         started = perf_counter()
         arguments_hash = canonical_json_hash(call.arguments)
         if task.agent_type != call.agent.value:
@@ -104,24 +79,16 @@ class LocalToolRegistry:
                 error_message=message,
                 error_field=field,
             )
+        if call.agent not in spec.permitted_agents:
+            return self._fail(
+                call,
+                started,
+                arguments_hash,
+                error_code="denied",
+                error_message="The agent is not allowed to call this tool.",
+            )
         tenant_argument = getattr(parsed, "tenant_id", None)
-        tenant_matches = not (
-            isinstance(tenant_argument, str) and tenant_argument != call.tenant_id
-        )
-        if not allow(
-            user=True,
-            agent=call.agent in spec.permitted_agents,
-            tool=True,
-            policy=tenant_matches,
-        ):
-            if call.agent not in spec.permitted_agents:
-                return self._fail(
-                    call,
-                    started,
-                    arguments_hash,
-                    error_code="denied",
-                    error_message="The agent is not allowed to call this tool.",
-                )
+        if isinstance(tenant_argument, str) and tenant_argument != call.tenant_id:
             return self._fail(
                 call,
                 started,
@@ -129,22 +96,6 @@ class LocalToolRegistry:
                 error_code="denied",
                 error_message="The tenant does not match the task.",
             )
-        denied = _managed_denial(self._policy, call)
-        if denied is not None:
-            code, message = denied
-            return self._fail(
-                call,
-                started,
-                arguments_hash,
-                error_code=code,
-                error_message=message,
-            )
-        if spec.kind == _WRITE_KIND:
-            arguments_hash = validated_arguments_hash(parsed)
-        if spec.read_only:
-            cached = self._memoized(call, arguments_hash)
-            if cached is not None:
-                return cached
         prior = self._prior(call, arguments_hash)
         succeeded = next((row for row in prior if row.status == ToolStatus.SUCCEEDED), None)
         if succeeded is not None:
@@ -166,14 +117,6 @@ class LocalToolRegistry:
                 arguments_hash,
                 error_code="stock_conflict",
                 error_message="Reserved units exceed on-hand units.",
-            )
-        except ProcurementWriteError as exc:
-            return self._fail(
-                call,
-                started,
-                arguments_hash,
-                error_code=exc.code,
-                error_message=exc.message,
             )
         return self._succeed(call, started, arguments_hash, payload, prior)
 
@@ -200,18 +143,17 @@ class LocalToolRegistry:
         )
 
     def _add(self, spec: ToolSpec) -> None:
-        if not _can_register(spec):
+        if spec.kind in _FORBIDDEN_KINDS or spec.kind != _READ_KIND or not spec.read_only:
             raise ToolRegistrationError("Only read-only tools can be registered.")
         if not spec.name or spec.name in self._specs:
             raise ToolRegistrationError("Tool names must be unique and stable.")
         self._specs[spec.name] = spec
 
-    def _stored_task(self, call: ToolCall) -> AgentTask | None:
-        """Find the workflow task. The supplied tenant is not part of the lookup."""
-
+    def _task(self, call: ToolCall) -> AgentTask | None:
         return self._db.scalar(
             select(AgentTask).where(
                 AgentTask.id == call.task_id,
+                AgentTask.tenant_id == call.tenant_id,
                 AgentTask.workflow_run_id == call.workflow_run_id,
             )
         )
@@ -243,9 +185,9 @@ class LocalToolRegistry:
         succeeded: ToolExecution,
         prior: list[ToolExecution],
     ) -> ToolResult:
-        cached = self._memoized(call, arguments_hash)
+        cached = self._cache.get((call.task_id, call.tool_name, arguments_hash))
         if cached is not None:
-            return cached
+            return cached.model_copy()
         started = perf_counter()
         try:
             payload = self._execute(spec, call, parsed)
@@ -267,15 +209,6 @@ class LocalToolRegistry:
                 error_message="Reserved units exceed on-hand units.",
                 prior=prior,
             )
-        except ProcurementWriteError as exc:
-            return self._fail(
-                call,
-                started,
-                arguments_hash,
-                error_code=exc.code,
-                error_message=exc.message,
-                prior=prior,
-            )
         result = _result(
             call,
             status=ToolStatus.SUCCEEDED,
@@ -285,7 +218,7 @@ class LocalToolRegistry:
             execution_id=succeeded.id,
             payload=payload,
         )
-        self._remember_memo(call, arguments_hash, result)
+        self._cache[(call.task_id, call.tool_name, arguments_hash)] = result
         return result.model_copy()
 
     def _succeed(
@@ -312,20 +245,8 @@ class LocalToolRegistry:
             execution_id=stored.id,
             payload=payload,
         )
-        self._remember_memo(call, arguments_hash, result)
+        self._cache[(call.task_id, call.tool_name, arguments_hash)] = result
         return result.model_copy()
-
-    def _memo_key(self, call: ToolCall, arguments_hash: str) -> tuple[UUID, str, str, str]:
-        return (call.workflow_run_id, call.tenant_id, call.tool_name, arguments_hash)
-
-    def _memoized(self, call: ToolCall, arguments_hash: str) -> ToolResult | None:
-        found = self._cache.get(self._memo_key(call, arguments_hash))
-        if found is None:
-            return None
-        return found.model_copy()
-
-    def _remember_memo(self, call: ToolCall, arguments_hash: str, result: ToolResult) -> None:
-        self._cache[self._memo_key(call, arguments_hash)] = result
 
     def _fail(
         self,
@@ -387,31 +308,6 @@ class LocalToolRegistry:
         if row is None:
             raise ToolTaskNotFound(call.task_id)
         return row
-
-
-def _managed_denial(
-    policy: ManagedPolicyAdapter | None,
-    call: ToolCall,
-) -> tuple[str, str] | None:
-    """Deny when the managed vote denies. Local arguments stay as they were."""
-
-    decision = managed_decision(policy, tool_request(call))
-    if decision is None:
-        return None
-    return denial_for(decision)
-
-
-def _can_register(spec: ToolSpec) -> bool:
-    if spec.kind in _FORBIDDEN_KINDS:
-        return False
-    if spec.kind == _READ_KIND and spec.read_only:
-        return True
-    return (
-        spec.kind == _WRITE_KIND
-        and not spec.read_only
-        and spec.name in WRITE_TOOL_NAMES
-        and spec.permitted_agents == _EXECUTOR
-    )
 
 
 def _next_retry(prior: list[ToolExecution]) -> int:
